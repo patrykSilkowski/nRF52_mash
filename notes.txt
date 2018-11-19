@@ -1,0 +1,91 @@
+# this is very begining of setting up the dev environment with this paricular repo #
+
+# prior to proceed further please make sure that you have installed
+1) GNU make
+	-> install: $ sudo apt-get install build-essential checkinstall
+	-> check if installed: $ make --version
+
+2) JLink (flashing driver/tool)
+	-> https://www.segger.com/downloads/jlink
+	-> please make sure to install the version that matches your system
+
+3) nrfjprog (command line programming tool)
+	-> ver 9.6.0 supports nRF52840_xxAA
+
+hint) add JLink and nrfjprog folders to PATH variable
+	1) move to the desired folder containing the files
+	2) $ pwd 
+	3) copy showed directory
+	4) open file ~/.profile: $ gedit ~/.profile
+	5) add the line on the bottom 'export PATH=$PATH:<paste_the_directory_here>'
+
+	-> after this you can execute nrfjprog from console from any directory; check version with $ nrfjprog -v and check the output.
+
+-----------------------------------------------
+	$ nrfjprog -v
+	nrfjprog version: 9.0.0
+	JLinkARM.dll version: 6.10g
+-----------------------------------------------
+
+4) for automated build please add to the ~/.profile the repository directory as:
+	'export NRF52_REPO_ROOT=<path_to_the_repository>
+
+	-> otherwise please add ARM_GCC path to the ./SDK/nRF5_SDK_14.2.0_17b948a/components/toolchain/gcc/Makefile.posix
+	'GNU_INSTALL_ROOT := <path_to_the_repository>/ARM_GCC/gcc-arm-none-eabi-4_9-2015q3/bin/'
+
+# at the very begining of using nRF52 PDK (the eval board with nRF52840) you should flash the "softDevice" - this is similar stuff like RTOS for nRF BLE apps
+
+	-> $ nrfjprog --family nrf52 -e && nrfjprog --family nrf52 --program ./SDK/nRF5_SDK_14.2.0_17b948a/components/softdevice/s140/hex/s140_nrf52840_5.0.0-2.alpha_softdevice.hex
+
+# build an example project
+	-> examples path: ./SDK/nRF5_SDK_14.2.0_17b948a/examples/
+	-> pca10056 describes nRF52 PDK (with nRF52840 SoC)
+	-> s140 describes SDK 14.x.x
+	-> build: there is a Makefile within armgcc folder of example, execute it with "$ make" and check the output; if all compiled properly, you should have a new "_build" folder containing the .hex file
+
+	-> example
+-----------------------------------------------
+	$ cd SDK/nRF5_SDK_14.2.0_17b948a/examples/peripheral/blinky/pca10056/blank/armgcc
+	$ make
+	$ nrfjprog --family NRF52 -e
+	$ nrfjprog --family NRF52 --program ./_build/nrf52840_xxaa.hex
+-----------------------------------------------
+	After the power-reset one should see the LEDs are blinking (LED1, LED2, LED3 and LED4).
+	
+# build the app from terminal
+build all: $ make all
+clean: $ make clean
+
+# usage of nrfjprog from terminal
+
+	erase: nrfjprog --family NRF52 -e
+	flash: nrfjprog --family NRF52 --program ../../../build/<hexfile_name>.hex
+
+# import project into Eclipse
+	-> in Project Explorer window click right mouse button and select 'Import...'
+	-> choose C/C++ -> Existing code as Makefile Project and click 'next'
+	-> write the project name, Existing Code Location (<your_repo_path>) and choose ARM Cross GCC as 'Toolchain for Indexer Settings'
+
+# auto discovery symbols and include paths in Eclipse
+
+	-> enter to project properies -> C/C++ General -> Preprocessor Inclue Paths, Macros etc. -> TAB: Providers
+	-> click on CDT GCC Build Output Parser and set 'Compiler command patern' as: (.*gcc)|(.*[gc]\+\+)
+	-> click on CDT ARM Cross GCC Build-in Compiler Settings and in 'Command to get compiler specs' change ${COMMAND} to <your_repo_path>/ARM_GCC/gcc-arm-none-eabi-4_9-2015q3/bin/arm-none-eabi-gcc
+
+# gdb configuration in Eclipse
+
+	-> enter the project's debug configuration and click GDB SEGGER J-Link Debugging (there should be defaut project's debug configuration)
+	-> in TAB: Main set 'C/C++ Application' to build/nrf52840_xxaa.out
+	-> in TAB: Debugger
+		-> set 'Executable path' to ${jlink_path}/${jlink_gdbserver}
+		-> in 'Actual executable' set a path of yours JLinkGDBServerCLExe file (it exist within JLink folder)
+		-> in GDB Client Setup section, set 'Executable name' as <your_repo_path>/ARM_GCC/gcc-arm-none-eabi-4_9-2015q3/bin/arm-none-eabi-gdb
+		-> the rest of options leave with defaults
+
+# info
+1) SDK (ver 14.2.0) was tested on nRF52840
+2) GNU toolchain: gcc-arm-none-eabi-4_9-2015q3 was suggested for this particular SDK
+3)
+4) modified Makefile.posix
+	GNU_INSTALL_ROOT := ./ARM_GCC/gcc-arm-none-eabi-4_9-2015q3/bin/
+
