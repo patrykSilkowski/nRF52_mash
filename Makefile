@@ -108,6 +108,7 @@ INC_FOLDERS += \
   $(SDK_ROOT)/components/thread/utils \
   $(SDK_ROOT)/external/fprintf \
   $(SDK_ROOT)/components/libraries/log/src \
+  $(SDK_ROOT)/components/libraries/log \
 
 # Libraries common to all targets
 LIB_FILES += \
@@ -120,7 +121,8 @@ LIB_FILES += \
   $(SDK_ROOT)/external/nrf_cc310/lib/libnrf_cc310_0.9.10.a \
 
 # Optimization flags
-OPT = -O3 -g3
+# -O3 changed to -O0 due to the debugging
+OPT = -O0 -g3
 # Uncomment the line below to enable link time optimization
 #OPT += -flto
 

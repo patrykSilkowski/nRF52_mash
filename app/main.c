@@ -480,6 +480,8 @@ int main(int argc, char *argv[])
     thread_bsp_init();
     mqttsn_init();
 
+    NRF_LOG_INFO("Hello world!");
+
     while (true)
     {
         thread_process();
