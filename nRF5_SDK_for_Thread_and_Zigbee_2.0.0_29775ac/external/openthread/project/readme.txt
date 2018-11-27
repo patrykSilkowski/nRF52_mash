@@ -1,1 +1,0 @@
-OpenThread libraries projects are based on the following commit of OpenThread: 704511c96e0d093139e4b80ef0739ed2d701afb1
