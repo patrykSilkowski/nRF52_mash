@@ -2,7 +2,7 @@ PROJECT_NAME     := app_pca10056
 TARGETS          := nrf52840_xxaa
 OUTPUT_DIRECTORY := build
 
-SDK_ROOT := ../nRF5_SDK_for_Thread_and_Zigbee_2.0.0_29775ac/
+SDK_ROOT := ../nRF5_SDK_for_Thread_and_Zigbee_2.0.0_29775ac
 PROJ_DIR := ./app
 
 $(OUTPUT_DIRECTORY)/nrf52840_xxaa.out: \
@@ -112,9 +112,9 @@ INC_FOLDERS += \
 
 # Libraries common to all targets
 LIB_FILES += \
-  $(SDK_ROOT)/external/openthread/lib/gcc/libopenthread-cli-mtd.a \
+  $(SDK_ROOT)/external/openthread/lib/gcc/libopenthread-cli-ftd.a \
   $(SDK_ROOT)/external/openthread/lib/gcc/libopenthread-diag.a \
-  $(SDK_ROOT)/external/openthread/lib/gcc/libopenthread-mtd.a \
+  $(SDK_ROOT)/external/openthread/lib/gcc/libopenthread-ftd.a \
   $(SDK_ROOT)/external/openthread/lib/gcc/libopenthread-platform-utils.a \
   $(SDK_ROOT)/external/openthread/lib/gcc/libmbedcrypto.a \
   $(SDK_ROOT)/external/openthread/lib/gcc/libopenthread-nrf52840-sdk.a \
@@ -132,7 +132,6 @@ CFLAGS += -DBOARD_PCA10056
 CFLAGS += -DCONFIG_GPIO_AS_PINRESET
 CFLAGS += -DFLOAT_ABI_HARD
 CFLAGS += -DNRF52840_XXAA
-CFLAGS += -DOPENTHREAD_MTD=1
 CFLAGS += -DSWI_DISABLE0
 CFLAGS += -DUART_ENABLED=1
 CFLAGS += -mcpu=cortex-m4
@@ -155,7 +154,6 @@ ASMFLAGS += -DBOARD_PCA10056
 ASMFLAGS += -DCONFIG_GPIO_AS_PINRESET
 ASMFLAGS += -DFLOAT_ABI_HARD
 ASMFLAGS += -DNRF52840_XXAA
-ASMFLAGS += -DOPENTHREAD_MTD=1
 ASMFLAGS += -DSWI_DISABLE0
 ASMFLAGS += -DUART_ENABLED=1
 
