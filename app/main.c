@@ -1,63 +1,18 @@
-/**
- * Copyright (c) 2017 - 2018, Nordic Semiconductor ASA
- *
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification,
- * are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form, except as embedded into a Nordic
- *    Semiconductor ASA integrated circuit in a product or a software update for
- *    such product, must reproduce the above copyright notice, this list of
- *    conditions and the following disclaimer in the documentation and/or other
- *    materials provided with the distribution.
- *
- * 3. Neither the name of Nordic Semiconductor ASA nor the names of its
- *    contributors may be used to endorse or promote products derived from this
- *    software without specific prior written permission.
- *
- * 4. This software, with or without modification, must only be used with a
- *    Nordic Semiconductor ASA integrated circuit.
- *
- * 5. Any software provided in binary form under this license must not be reverse
- *    engineered, decompiled, modified and/or disassembled.
- *
- * THIS SOFTWARE IS PROVIDED BY NORDIC SEMICONDUCTOR ASA "AS IS" AND ANY EXPRESS
- * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
- * OF MERCHANTABILITY, NONINFRINGEMENT, AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL NORDIC SEMICONDUCTOR ASA OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
- * GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
- * OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- */
-/** @file
- *
- * @defgroup thread_mqttsn_sleepy_publisher_example_main main.c
- * @{
- * @ingroup thread_mqttsn_sleepy_publisher_example
- * @brief Thread MQTT-SN Sleepy Publisher Example Application main file.
- *
- * @details This example demonstrates an MQTT-SN sleepy publisher application that enables to toggle
- *          BSP_LED_2 on a board with related MQTT-SN sleepy subscriber application via MQTT-SN messages.
- *          As the MQTT-SN sleepy publisher has no subscriptions, it will not need to receive data except
- *          for ACKs for its own messages, so asynchronous receiving is not needed. It therefore serves
- *          as a Thread Sleepy End Device.
+/*
+    MQTT-SN pub/sub example on nRF52840 Thread - adapted from Nordic SDK
+    examples.
+
+    Buttons/LEDS as input/output devices (buttons are treated as switches)
+    protocol usage presented in ../tools/protocol.odt
  */
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
+#include "app_scheduler.h"
 #include "app_timer.h"
 #include "bsp_thread.h"
-#include "nrf_assert.h"
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
@@ -65,30 +20,56 @@
 #include "mqttsn_client.h"
 #include "thread_utils.h"
 
-#include <openthread/ip6.h>
 #include <openthread/thread.h>
+#include <openthread/joiner.h>
 
-#define DEFAULT_CHILD_TIMEOUT    40                                         /**< Thread child timeout [s]. */
-#define DEFAULT_POLL_PERIOD      1000                                       /**< Thread Sleepy End Device polling period when MQTT-SN Asleep. [ms] */
-#define SHORT_POLL_PERIOD        100                                        /**< Thread Sleepy End Device polling period when MQTT-SN Awake. [ms] */
-#define NUM_SLAAC_ADDRESSES      4                                          /**< Number of SLAAC addresses. */
-#define SEARCH_GATEWAY_TIMEOUT   5                                          /**< MQTT-SN Gateway discovery procedure timeout in [s]. */                                   
+#define VENDOR_NAME   "SIGMA_PS"
+#define VENDOR_MODEL  "1"
+#define VENDOR_SW_VER "0.0.1"
+#define VENDOR_DATA   NULL
+#define JOINER_PSKD   "J01NME"
+
+#define DEFAULT_CHILD_TIMEOUT  40                                           /**< Thread child timeout [s]. */
+#define DEFAULT_POLL_PERIOD    1000                                         /**< Thread Sleepy End Device polling period when MQTT-SN Asleep. [ms] */
+#define NUM_SLAAC_ADDRESSES    4                                            /**< Number of SLAAC addresses. */
+#define SEARCH_GATEWAY_TIMEOUT 5                                            /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
+
+#define SCHED_QUEUE_SIZE       32                                           /**< Maximum number of events in the scheduler queue. */
+#define SCHED_EVENT_DATA_SIZE  APP_TIMER_SCHED_EVENT_DATA_SIZE              /**< Maximum app_scheduler event size. */
+
+#define APP_TIM_JOINER_DELAY 200
 
 static mqttsn_client_t      m_client;                                       /**< An MQTT-SN client instance. */
 static mqttsn_remote_t      m_gateway_addr;                                 /**< A gateway address. */
 static uint8_t              m_gateway_id;                                   /**< A gateway ID. */
 static mqttsn_connect_opt_t m_connect_opt;                                  /**< Connect options for the MQTT-SN client. */
-static uint8_t              m_led_state        = 0;                         /**< Previously sent BSP_LED_2 command. */
-static uint16_t             m_msg_id           = 0;                         /**< Message ID thrown with MQTTSN_EVENT_TIMEOUT. */
-static char                 m_client_id[]      = "nRF52840_publisher";      /**< The MQTT-SN Client's ID. */
-static char                 m_topic_name[]     = "nRF52840_resources/led3"; /**< Name of the topic corresponding to subscriber's BSP_LED_2. */
-static mqttsn_topic_t       m_topic            =                            /**< Topic corresponding to subscriber's BSP_LED_2. */
+static uint16_t             m_msg_id               = 0;                     /**< Message ID thrown with MQTTSN_EVENT_TIMEOUT. */
+
+// THESE SHOULD BE CHANGED ACCORDING TO PROTOCOL ASSUMPTIONS
+// CLIENT ID IS BASED ON EUI64
+static otNetifAddress m_slaac_addresses[NUM_SLAAC_ADDRESSES];               /**< Buffer containing addresses resolved by SLAAC */
+
+static char                 m_client_id[]          = "nRF52840";            /**< The MQTT-SN Client's ID. */
+static char                 m_topic_name_pub[]     = "nRF52840/data";       /**< Name of the topic corresponding to subscriber's BSP_LED_2. */
+static mqttsn_topic_t       m_topic_pub            =                        /**< Topic corresponding to subscriber's BSP_LED_2. */
 {
-    .p_topic_name = (unsigned char *)m_topic_name,
+    .p_topic_name = (unsigned char *)m_topic_name_pub,
     .topic_id     = 0,
 };
 
-static otNetifAddress m_slaac_addresses[NUM_SLAAC_ADDRESSES];               /**< Buffer containing addresses resolved by SLAAC */
+static char                 m_topic_name_sub[]     = "nRF52840/cmd";        /**< Name of the topic corresponding to subscriber's BSP_LED_2. */
+static mqttsn_topic_t       m_topic_sub            =                        /**< Topic corresponding to subscriber's BSP_LED_2. */
+{
+    .p_topic_name = (unsigned char *)m_topic_name_sub,
+    .topic_id     = 0,
+};
+
+static bool g_sub_registered = false;
+static bool g_led_2_on = false;
+static bool g_led_3_on = false;
+
+APP_TIMER_DEF(m_joiner_timer);
+
 
 /***************************************************************************************************
  * @section MQTT-SN
@@ -103,6 +84,7 @@ static void light_on(void)
     LEDS_ON(BSP_LED_3_MASK);
 }
 
+
 /**@brief Turns the MQTT-SN network indication LED off.
  *
  * @details This LED is on when an MQTT-SN client is in disconnected or asleep state.
@@ -112,23 +94,6 @@ static void light_off(void)
     LEDS_OFF(BSP_LED_3_MASK);
 }
 
-/**@brief Puts MQTT-SN client in sleep mode.
- *
- * @details This function changes Thread Sleepy End Device polling period to default.
- */
-static void sleep(void)
-{
-   otLinkSetPollPeriod(thread_ot_instance_get(), DEFAULT_POLL_PERIOD);
-}
-
-/**@brief Puts MQTT-SN client in active mode.
- *
- * @details This function changes Thread Sleepy End Device polling period to short.
- */
-static void wake_up(void)
-{
-   otLinkSetPollPeriod(thread_ot_instance_get(), SHORT_POLL_PERIOD);
-}
 
 /**@brief Initializes MQTT-SN client's connection options.
  */
@@ -142,17 +107,19 @@ static void connect_opt_init(void)
     memcpy(m_connect_opt.p_client_id, (unsigned char *)m_client_id, m_connect_opt.client_id_len);
 }
 
+
 /**@brief Processes GWINFO message from a gateway.
  *
- * @details This function initializes MQTT-SN Client's connect options and launches the connect procedure.
+ * @details This function updates MQTT-SN Gateway information.
  *
  * @param[in]    p_event  Pointer to MQTT-SN event.
  */
 static void gateway_info_callback(mqttsn_event_t * p_event)
 {
-    m_gateway_addr  = *(p_event->event_data.connected.p_gateway_addr);
-    m_gateway_id    = p_event->event_data.connected.gateway_id;
+    m_gateway_addr = *(p_event->event_data.connected.p_gateway_addr);
+    m_gateway_id   = p_event->event_data.connected.gateway_id;
 }
+
 
 /**@brief Processes CONNACK message from a gateway.
  *
@@ -163,8 +130,8 @@ static void connected_callback(void)
     light_on();
 
     uint32_t err_code = mqttsn_client_topic_register(&m_client,
-                                                     m_topic.p_topic_name,
-                                                     strlen(m_topic_name),
+                                                     m_topic_pub.p_topic_name,
+                                                     strlen(m_topic_name_pub),
                                                      &m_msg_id);
     if (err_code != NRF_SUCCESS)
     {
@@ -172,54 +139,66 @@ static void connected_callback(void)
     }
 }
 
+
 /**@brief Processes DISCONNECT message from a gateway. */
 static void disconnected_callback(void)
 {
     light_off();
-    sleep();
 }
 
+static void subscribe()
+{
+    uint8_t  topic_name_len = strlen(m_topic_name_sub);
+    uint32_t err_code = mqttsn_client_subscribe(&m_client,
+        m_topic_sub.p_topic_name, topic_name_len, &m_msg_id);
+    if (err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("SUBSCRIBE message could not be sent.\r\n");
+    }
+    else
+    {
+        NRF_LOG_ERROR("SUBSCRIBE message successfully sent.");
+    }
+}
 /**@brief Processes REGACK message from a gateway.
- *
- * @details This function puts the client in sleep mode.
  *
  * @param[in] p_event Pointer to MQTT-SN event.
  */
 static void regack_callback(mqttsn_event_t * p_event)
 {
-    m_topic.topic_id = p_event->event_data.registered.packet.topic.topic_id;
     NRF_LOG_INFO("MQTT-SN event: Topic has been registered with ID: %d.\r\n",
                  p_event->event_data.registered.packet.topic.topic_id);
 
-    sleep();
+    // register subscriber if not already registered
+    if (!g_sub_registered)
+    {
+        m_topic_pub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
+
+        g_sub_registered = true;
+
+        uint32_t err_code = mqttsn_client_topic_register(&m_client,
+                                                     m_topic_sub.p_topic_name,
+                                                     strlen(m_topic_name_sub),
+                                                     &m_msg_id);
+        if (err_code != NRF_SUCCESS)
+        {
+            NRF_LOG_ERROR("REGISTER message could not be sent. Error code: 0x%x\r\n", err_code);
+        }
+        else
+        {
+            NRF_LOG_ERROR("REGISTER message successfully sent.");
+        }
+    }
+    else
+    {
+        // store id
+        m_topic_sub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
+
+        // subscribe
+        subscribe();
+    }
 }
 
-/**@brief Processes PUBACK message from a gateway.
- *
- * @details This function puts the client in sleep mode.
- */
-static void puback_callback(void)
-{
-    sleep();
-}
-
-/**@brief Processes DISCONNECT message being a response to sleep request.
- *
- * @details This function puts the client in sleep mode.
- */
-static void sleep_callback(void)
-{
-    sleep();
-}
-
-/**@brief Processes callback from keep-alive timer timeout.
- *
- * @details This function puts the client in active mode.
- */
-static void wakeup_callback(void)
-{
-    wake_up();
-}
 
 /**@brief Processes retransmission limit reached event. */
 static void timeout_callback(mqttsn_event_t * p_event)
@@ -229,17 +208,54 @@ static void timeout_callback(mqttsn_event_t * p_event)
                   p_event->event_data.error.msg_id);
 }
 
+
 /**@brief Processes results of gateway discovery procedure. */
 static void searchgw_timeout_callback(mqttsn_event_t * p_event)
 {
     NRF_LOG_INFO("MQTT-SN event: Gateway discovery result: 0x%x.\r\n", p_event->event_data.discovery);
-    sleep();
+
+    // if gateway was discovered, turn LED 2 on
+    if (p_event->event_data.discovery == 0)
+    {
+        LEDS_ON(BSP_LED_2_MASK);
+        g_led_2_on = true;
+    }
+}
+
+/**@brief Processes data published by a broker.
+ *
+ * @details This function processes LED command.
+ */
+static void received_callback(mqttsn_event_t * p_event)
+{
+    if (p_event->event_data.published.packet.topic.topic_id == m_topic_sub.topic_id)
+    {
+        uint8_t* p_data = p_event->event_data.published.p_payload;
+        NRF_LOG_INFO("MQTT-SN event: Content to subscribed topic received.\r\n");
+        NRF_LOG_INFO("Topic id: %d, data: %5s",
+            p_event->event_data.published.packet.topic.topic_id,
+            p_data);
+
+        // turn LEDs on/off
+        if (p_data[0] == '1') {
+            LEDS_ON(BSP_LED_2_MASK);
+            g_led_2_on = true;
+        }
+        else {
+            LEDS_OFF(BSP_LED_2_MASK);
+            g_led_2_on = false;
+        }
+    }
+    else
+    {
+        NRF_LOG_INFO("MQTT-SN event: Content to unsubscribed topic received. Dropping packet.\r\n");
+    }
 }
 
 /**@brief Function for handling MQTT-SN events. */
 void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_event)
 {
-    switch (p_event->event_id)
+    switch(p_event->event_id)
     {
         case MQTTSN_EVENT_GATEWAY_FOUND:
             NRF_LOG_INFO("MQTT-SN event: Client has found an active gateway.\r\n");
@@ -251,7 +267,7 @@ void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_event)
             connected_callback();
             break;
 
-        case MQTTSN_EVENT_DISCONNECTED:
+        case MQTTSN_EVENT_DISCONNECT_PERMIT:
             NRF_LOG_INFO("MQTT-SN event: Client disconnected.\r\n");
             disconnected_callback();
             break;
@@ -263,24 +279,26 @@ void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_event)
 
         case MQTTSN_EVENT_PUBLISHED:
             NRF_LOG_INFO("MQTT-SN event: Client has successfully published content.\r\n");
-            puback_callback();
             break;
 
-        case MQTTSN_EVENT_SLEEP_PERMIT:
-            NRF_LOG_INFO("MQTT-SN event: Client permitted to sleep.\r\n");
-            sleep_callback();
+        case MQTTSN_EVENT_SUBSCRIBED:
+            NRF_LOG_INFO("MQTT-SN event: Client subscribed to topic.\r\n");
             break;
 
-        case MQTTSN_EVENT_SLEEP_STOP:
-            NRF_LOG_INFO("MQTT-SN event: Client wakes up.\r\n");
-            wakeup_callback();
+        case MQTTSN_EVENT_UNSUBSCRIBED:
+            NRF_LOG_INFO("MQTT-SN event: Client unsubscribed to topic.\r\n");
+            break;
+
+        case MQTTSN_EVENT_RECEIVED:
+            NRF_LOG_INFO("MQTT-SN event: Client received content.\r\n");
+            received_callback(p_event);
             break;
 
         case MQTTSN_EVENT_TIMEOUT:
             NRF_LOG_INFO("MQTT-SN event: Retransmission retries limit has been reached.\r\n");
             timeout_callback(p_event);
             break;
-        
+
         case MQTTSN_EVENT_SEARCHGW_TIMEOUT:
             NRF_LOG_INFO("MQTT-SN event: Gateway discovery procedure has finished.\r\n");
             searchgw_timeout_callback(p_event);
@@ -315,28 +333,24 @@ static void state_changed_callback(uint32_t flags, void * p_context)
     }
 }
 
-/***************************************************************************************************
- * @section Buttons
- **************************************************************************************************/
-
-static void led_state_pub(uint8_t led_state)
+static void publish(void)
 {
-    uint32_t err_code = mqttsn_client_publish(&m_client, m_topic.topic_id, &led_state, 1, &m_msg_id);
+    char* pub_data = g_led_2_on ? "1" : "0";
+    uint32_t err_code = mqttsn_client_publish(&m_client, m_topic_pub.topic_id,
+        (uint8_t*)pub_data, strlen(pub_data), &m_msg_id);
     if (err_code != NRF_SUCCESS)
     {
         NRF_LOG_ERROR("PUBLISH message could not be sent. Error code: 0x%x\r\n", err_code)
     }
-}
-
-static void publish(void)
-{
-    m_led_state = m_led_state == 1 ? 0 : 1;
-    led_state_pub(m_led_state);
+    else
+    {
+        NRF_LOG_INFO("PUBLISH successfully sent.");
+    }
 }
 
 static void bsp_event_handler(bsp_event_t event)
 {
-    if (otThreadGetDeviceRole(thread_ot_instance_get()) < OT_DEVICE_ROLE_CHILD )
+    if (otThreadGetDeviceRole(thread_ot_instance_get()) < OT_DEVICE_ROLE_CHILD)
     {
         (void)event;
         return;
@@ -346,20 +360,24 @@ static void bsp_event_handler(bsp_event_t event)
     {
         case BSP_EVENT_KEY_1:
         {
-            wake_up();
+            // reset LED state
+            LEDS_OFF(BSP_LED_2_MASK);
+            g_led_2_on = false;
 
             uint32_t err_code = mqttsn_client_search_gateway(&m_client, SEARCH_GATEWAY_TIMEOUT);
             if (err_code != NRF_SUCCESS)
             {
                 NRF_LOG_ERROR("SEARCH GATEWAY message could not be sent. Error: 0x%x\r\n", err_code);
             }
-            break;
+            else
+            {
+                NRF_LOG_INFO("SEARCH GATEWAY message sent.");
+            }
         }
+        break;
 
         case BSP_EVENT_KEY_2:
         {
-            wake_up();
-
             uint32_t err_code;
 
             if (mqttsn_client_state_get(&m_client) == MQTTSN_CLIENT_CONNECTED)
@@ -369,6 +387,12 @@ static void bsp_event_handler(bsp_event_t event)
                 {
                     NRF_LOG_ERROR("DISCONNECT message could not be sent. Error: 0x%x\r\n", err_code);
                 }
+                else
+                {
+                    //LEDS_OFF(BSP_LED_3_MASK);
+                    g_led_3_on = false;
+                    NRF_LOG_INFO("DISCONNECT MQTT-SN CLIENT message sent.");
+                }
             }
             else
             {
@@ -377,22 +401,25 @@ static void bsp_event_handler(bsp_event_t event)
                 {
                     NRF_LOG_ERROR("CONNECT message could not be sent. Error: 0x%x\r\n", err_code);
                 }
+                else
+                {
+                    //LEDS_ON(BSP_LED_3_MASK);
+                    g_led_3_on = true;
+                    NRF_LOG_INFO("CONNECT MQTT-SN CLIENT message sent.");
+                }
             }
-            break;
         }
+        break;
 
         case BSP_EVENT_KEY_3:
         {
-            wake_up();
             publish();
-            break;
         }
+        break;
 
         default:
-        {
-            break;
-        }
-    }
+        break;
+    } // end of switch
 }
 
 /***************************************************************************************************
@@ -407,6 +434,7 @@ static void timer_init(void)
     APP_ERROR_CHECK(err_code);
 }
 
+
 /**@brief Function for initializing the LEDs.
  */
 static void leds_init(void)
@@ -414,6 +442,17 @@ static void leds_init(void)
     LEDS_CONFIGURE(LEDS_MASK);
     LEDS_OFF(LEDS_MASK);
 }
+
+
+/**@brief Function for initializing the buttons and their event handler.
+ */
+static void buttons_bsp_init(void)
+{
+    uint32_t err_code;
+    err_code = bsp_init(BSP_INIT_LEDS | BSP_INIT_BUTTONS, bsp_event_handler);
+    APP_ERROR_CHECK(err_code);
+}
+
 
 /**@brief Function for initializing the nrf log module.
  */
@@ -425,17 +464,6 @@ static void log_init(void)
     NRF_LOG_DEFAULT_BACKENDS_INIT();
 }
 
-/**@brief Function for initializing the Thread Board Support Package.
- */
-static void thread_bsp_init(void)
-{
-    uint32_t err_code;
-    err_code = bsp_init(BSP_INIT_LEDS | BSP_INIT_BUTTONS, bsp_event_handler);
-    APP_ERROR_CHECK(err_code);
-
-    err_code = bsp_thread_init(thread_ot_instance_get());
-    APP_ERROR_CHECK(err_code);
-}
 
 /**@brief Function for initializing the Thread Stack.
  */
@@ -443,15 +471,17 @@ static void thread_instance_init(void)
 {
     thread_configuration_t thread_configuration =
     {
-        .role                  = RX_OFF_WHEN_IDLE,
-        .autocommissioning     = true,
+        .role                  = RX_ON_WHEN_IDLE,
+        .autocommissioning     = false,
         .poll_period           = DEFAULT_POLL_PERIOD,
         .default_child_timeout = DEFAULT_CHILD_TIMEOUT,
     };
 
     thread_init(&thread_configuration);
+    thread_cli_init();  // DONT NEED THIS ANYMORE ->
     thread_state_changed_callback_set(state_changed_callback);
 }
+
 
 /**@brief Function for initializing the MQTTSN client.
  */
@@ -466,6 +496,220 @@ static void mqttsn_init(void)
     connect_opt_init();
 }
 
+
+/**@brief Function for initializing scheduler module.
+ */
+static void scheduler_init(void)
+{
+    APP_SCHED_INIT(SCHED_EVENT_DATA_SIZE, SCHED_QUEUE_SIZE);
+}
+
+
+/**@brief Function for triggering timer which handles the joiner state.
+ */
+static uint32_t start_joiner_timer(void)
+{
+    return app_timer_start(m_joiner_timer,
+                           APP_TIMER_TICKS(APP_TIM_JOINER_DELAY),
+                           thread_ot_instance_get());
+}
+
+
+static int join_tries = 20;
+/**@brief Callback function for initializing the joiner state.
+ */
+static void joiner_callback(otError aError, void *aContext)
+{
+    switch (aError)
+    {
+        case OT_ERROR_NONE:
+            NRF_LOG_INFO("Joiner: success");
+            aError = otThreadSetEnabled(thread_ot_instance_get(), true);
+            //print_ip_info();
+            ASSERT(aError == OT_ERROR_NONE);
+        break;
+
+        case OT_ERROR_SECURITY:
+            NRF_LOG_ERROR("Joiner: failed - credentials");
+        break;
+
+        case OT_ERROR_NOT_FOUND:
+            NRF_LOG_ERROR("Joiner: failed - no network");
+        break;
+
+        case OT_ERROR_RESPONSE_TIMEOUT:
+            NRF_LOG_ERROR("Joiner: failed - timeout");
+        break;
+
+        default:
+        break;
+    }
+
+    if (aError != OT_ERROR_NONE)
+    {
+        uint32_t err_code;
+        join_tries--;
+
+        if (join_tries > 0)
+        {
+            err_code = start_joiner_timer();
+            APP_ERROR_CHECK(err_code);
+        }
+        else
+        {
+            NRF_LOG_ERROR("Commissioning failed!");
+        }
+    }
+}
+
+
+/**@brief Function for initializing the joiner state.
+ */
+static void joiner_start(void * p_context)
+{
+    otError ret = otJoinerStart(thread_ot_instance_get(),
+                                JOINER_PSKD,
+                                NULL,
+                                VENDOR_NAME,
+                                VENDOR_MODEL,
+                                VENDOR_SW_VER,
+                                VENDOR_DATA,
+                                joiner_callback,
+                                p_context);
+
+    switch(ret)
+    {
+        case OT_ERROR_NONE:
+            NRF_LOG_INFO("Joiner: start success");
+        break;
+
+        case OT_ERROR_INVALID_ARGS:
+            NRF_LOG_ERROR("Joiner: aPSKd or a ProvisioningUrl is invalid.");
+        break;
+
+        case OT_ERROR_DISABLED_FEATURE:
+            NRF_LOG_ERROR("Joiner: is not enabled");
+        break;
+
+        default:
+        break;
+    }
+}
+
+
+/**@brief Function for initializing timer which handles the joiner state.
+ */
+static void init_joiner_timer(void)
+{
+    uint32_t err_code = app_timer_create(&m_joiner_timer, APP_TIMER_MODE_SINGLE_SHOT, joiner_start);
+    APP_ERROR_CHECK(err_code);
+}
+
+
+/**@brief Function for formating IPv6 from typedef to string.
+ */
+void format_ip6(char *str, const otIp6Address* addr)
+{
+    if(addr)
+    {
+        sprintf(str,"%x:%x:%x:%x:%x:%x:%x:%x",
+                addr->mFields.m16[0],
+                addr->mFields.m16[1],
+                addr->mFields.m16[2],
+                addr->mFields.m16[3],
+                addr->mFields.m16[4],
+                addr->mFields.m16[5],
+                addr->mFields.m16[6],
+                addr->mFields.m16[7]);
+    }
+    else
+    {
+        sprintf(str,"NULL");
+    }
+}
+
+
+/**@brief Function for printing IP information via NRF_LOG(RTT).
+ */
+static void print_ip_info(void)
+{
+    char buff[128];
+    const otNetifMulticastAddress *mulAddress
+        = otIp6GetMulticastAddresses(thread_ot_instance_get());
+
+    //otNetifMulticastAddress **_mulAddr = &mulAddress;
+    //otNetifAddress uniAddress = otIp6GetUnicastAdresses(thread_ot_instance_get());
+    if(mulAddress)
+    {
+        for(; mulAddress/*->mNext*/; mulAddress = mulAddress->mNext)
+        {
+            format_ip6(buff,&(mulAddress->mAddress));
+            NRF_LOG_INFO("Multicast Address: %s", nrf_log_push(buff));
+            NRF_LOG_PROCESS();
+        }
+    }
+
+    const otNetifAddress *uniAddress
+        = otIp6GetUnicastAddresses(thread_ot_instance_get());
+
+    if(uniAddress)
+    {
+        for(; uniAddress/*->mNext*/; uniAddress=uniAddress->mNext)
+        {
+            format_ip6(buff,&(uniAddress->mAddress));
+            NRF_LOG_INFO("Unicast Address: %s", nrf_log_push(buff));
+            NRF_LOG_PROCESS();
+        }
+    }
+}
+
+
+/**@brief Function for checking the commissioning status.
+ */
+static void commissioning_check(void)
+{
+    return; // TODO FIX ME
+
+    if (!otDatasetIsCommissioned(thread_ot_instance_get()))
+    {
+        NRF_LOG_ERROR("Device failed to commission!");
+    }
+    else
+    {
+        NRF_LOG_INFO("Device successfully commissioned!");
+        print_ip_info();
+    }
+}
+
+static char str_eui[17];
+
+/**@brief Function for initializing device information
+ * (eui64 and QRcode to generate pattern)
+ */
+static void device_info_init(void)
+{
+    otExtAddress eui64;
+
+    otLinkGetFactoryAssignedIeeeEui64(thread_ot_instance_get(), &eui64);
+
+    NRF_LOG_PROCESS();
+    NRF_LOG_FLUSH();
+
+    sprintf(str_eui,"%x%x%x%x%x%x%x%x",
+            eui64.m8[0],
+            eui64.m8[1],
+            eui64.m8[2],
+            eui64.m8[3],
+            eui64.m8[4],
+            eui64.m8[5],
+            eui64.m8[6],
+            eui64.m8[7]);
+
+    NRF_LOG_INFO("EUI64:%s",str_eui);
+    NRF_LOG_INFO("QRCODE: v=1&&eui=%s&&cc=%s", str_eui, JOINER_PSKD);
+    NRF_LOG_PROCESS();
+}
+
 /***************************************************************************************************
  * @section Main
  **************************************************************************************************/
@@ -473,18 +717,27 @@ static void mqttsn_init(void)
 int main(int argc, char *argv[])
 {
     log_init();
+    scheduler_init();
     timer_init();
     leds_init();
+    buttons_bsp_init();
+
+/*
+ *  mash_id_gen();
+    NRF_LOG_INFO("ID:%s",mash_get_id());
+ */
 
     thread_instance_init();
-    thread_bsp_init();
+    init_joiner_timer();
+    commissioning_check();
+    device_info_init();
     mqttsn_init();
-
-    NRF_LOG_INFO("Hello world!");
+    start_joiner_timer();
 
     while (true)
     {
         thread_process();
+        app_sched_execute();
 
         if (NRF_LOG_PROCESS() == false)
         {
