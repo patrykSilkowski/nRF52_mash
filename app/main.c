@@ -32,12 +32,14 @@
 #define DEFAULT_CHILD_TIMEOUT  40                                           /**< Thread child timeout [s]. */
 #define DEFAULT_POLL_PERIOD    1000                                         /**< Thread Sleepy End Device polling period when MQTT-SN Asleep. [ms] */
 #define NUM_SLAAC_ADDRESSES    4                                            /**< Number of SLAAC addresses. */
-#define SEARCH_GATEWAY_TIMEOUT 5                                            /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
+#define SEARCH_GATEWAY_TIMEOUT 100                                          /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
 
 #define SCHED_QUEUE_SIZE       32                                           /**< Maximum number of events in the scheduler queue. */
 #define SCHED_EVENT_DATA_SIZE  APP_TIMER_SCHED_EVENT_DATA_SIZE              /**< Maximum app_scheduler event size. */
 
 #define APP_TIM_JOINER_DELAY 200
+#define APP_TIMER_TICKS_TIMEOUT APP_TIMER_TICKS(50)
+//APP_TIMER_DEF(m_joiner_timer);
 
 static mqttsn_client_t      m_client;                                       /**< An MQTT-SN client instance. */
 static mqttsn_remote_t      m_gateway_addr;                                 /**< A gateway address. */
@@ -68,8 +70,22 @@ static bool g_sub_registered = false;
 static bool g_led_2_on = false;
 static bool g_led_3_on = false;
 
-APP_TIMER_DEF(m_joiner_timer);
 
+/***************************************************************************************************
+ * @section scheduler prototypes
+ **************************************************************************************************/
+
+static void sched_send_report(void * p_event_data, uint16_t event_size);
+static void sched_joiner(void * p_event_data, uint16_t event_size);
+static void sched_get_ip(void * p_event_data, uint16_t event_size);
+//static void sched_get_device_data(void * p_event_data, uint16_t event_size);
+
+
+/***************************************************************************************************
+ * @section app prototypes
+ **************************************************************************************************/
+static void joiner_start(void * p_context);
+static void print_ip_info(void);
 
 /***************************************************************************************************
  * @section MQTT-SN
@@ -157,7 +173,7 @@ static void subscribe()
     }
     else
     {
-        NRF_LOG_ERROR("SUBSCRIBE message successfully sent.");
+        NRF_LOG_INFO("SUBSCRIBE message successfully sent.");
     }
 }
 /**@brief Processes REGACK message from a gateway.
@@ -186,7 +202,7 @@ static void regack_callback(mqttsn_event_t * p_event)
         }
         else
         {
-            NRF_LOG_ERROR("REGISTER message successfully sent.");
+            NRF_LOG_INFO("REGISTER message successfully sent.");
         }
     }
     else
@@ -331,6 +347,8 @@ static void state_changed_callback(uint32_t flags, void * p_context)
                           sizeof(m_slaac_addresses) / sizeof(m_slaac_addresses[0]),
                           otIp6CreateRandomIid, NULL);
     }
+
+    app_sched_event_put(NULL, 0, sched_send_report);
 }
 
 static void publish(void)
@@ -478,7 +496,7 @@ static void thread_instance_init(void)
     };
 
     thread_init(&thread_configuration);
-    thread_cli_init();  // DONT NEED THIS ANYMORE ->
+    //thread_cli_init();  // DONT NEED THIS ANYMORE ->
     thread_state_changed_callback_set(state_changed_callback);
 }
 
@@ -496,6 +514,11 @@ static void mqttsn_init(void)
     connect_opt_init();
 }
 
+static void report_on_network()
+{
+    return; // MB wrote UDP handling here
+}
+
 
 /**@brief Function for initializing scheduler module.
  */
@@ -504,16 +527,36 @@ static void scheduler_init(void)
     APP_SCHED_INIT(SCHED_EVENT_DATA_SIZE, SCHED_QUEUE_SIZE);
 }
 
+static void sched_send_report(void * p_event_data, uint16_t event_size)
+{
+    report_on_network();
+}
+static void sched_joiner(void * p_event_data, uint16_t event_size)
+{
+    joiner_start(NULL);
+}
+static void sched_get_ip(void * p_event_data, uint16_t event_size)
+{
+    print_ip_info();
+}
+
+/*
+static void sched_get_device_data(void * p_event_data, uint16_t event_size)
+{
+    return;
+}
+*/
 
 /**@brief Function for triggering timer which handles the joiner state.
  */
+ /*
 static uint32_t start_joiner_timer(void)
 {
     return app_timer_start(m_joiner_timer,
                            APP_TIMER_TICKS(APP_TIM_JOINER_DELAY),
                            thread_ot_instance_get());
 }
-
+*/
 
 static int join_tries = 20;
 /**@brief Callback function for initializing the joiner state.
@@ -547,12 +590,11 @@ static void joiner_callback(otError aError, void *aContext)
 
     if (aError != OT_ERROR_NONE)
     {
-        uint32_t err_code;
         join_tries--;
 
         if (join_tries > 0)
         {
-            err_code = start_joiner_timer();
+            uint32_t err_code = app_sched_event_put(NULL, 0, sched_joiner);
             APP_ERROR_CHECK(err_code);
         }
         else
@@ -594,15 +636,6 @@ static void joiner_start(void * p_context)
         default:
         break;
     }
-}
-
-
-/**@brief Function for initializing timer which handles the joiner state.
- */
-static void init_joiner_timer(void)
-{
-    uint32_t err_code = app_timer_create(&m_joiner_timer, APP_TIMER_MODE_SINGLE_SHOT, joiner_start);
-    APP_ERROR_CHECK(err_code);
 }
 
 
@@ -668,17 +701,20 @@ static void print_ip_info(void)
  */
 static void commissioning_check(void)
 {
-    return; // TODO FIX ME
+    //return; // TODO FIX ME
 
     if (!otDatasetIsCommissioned(thread_ot_instance_get()))
     {
-        NRF_LOG_ERROR("Device failed to commission!");
+        NRF_LOG_ERROR("Device is not commissioned yet!");
+        app_sched_event_put(NULL, 0, sched_joiner);
     }
     else
     {
         NRF_LOG_INFO("Device successfully commissioned!");
-        print_ip_info();
+        app_sched_event_put(NULL, 0, sched_get_ip);
     }
+
+    NRF_LOG_PROCESS();
 }
 
 static char str_eui[17];
@@ -707,6 +743,7 @@ static void device_info_init(void)
 
     NRF_LOG_INFO("EUI64:%s",str_eui);
     NRF_LOG_INFO("QRCODE: v=1&&eui=%s&&cc=%s", str_eui, JOINER_PSKD);
+    NRF_LOG_INFO("sudo wpanctl commissioner -a %s %s", JOINER_PSKD, str_eui);
     NRF_LOG_PROCESS();
 }
 
@@ -728,11 +765,11 @@ int main(int argc, char *argv[])
  */
 
     thread_instance_init();
-    init_joiner_timer();
+    //init_joiner_timer();
     commissioning_check();
     device_info_init();
     mqttsn_init();
-    start_joiner_timer();
+    //start_joiner_timer();
 
     while (true)
     {
