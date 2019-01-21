@@ -23,29 +23,35 @@
 #include <openthread/thread.h>
 #include <openthread/joiner.h>
 
+
 #define VENDOR_NAME   "SIGMA_PS"
 #define VENDOR_MODEL  "1"
 #define VENDOR_SW_VER "0.0.1"
 #define VENDOR_DATA   NULL
 #define JOINER_PSKD   "J01NME"
 
+
 #define DEFAULT_CHILD_TIMEOUT  40                                           /**< Thread child timeout [s]. */
 #define DEFAULT_POLL_PERIOD    1000                                         /**< Thread Sleepy End Device polling period when MQTT-SN Asleep. [ms] */
 #define NUM_SLAAC_ADDRESSES    4                                            /**< Number of SLAAC addresses. */
+#define OT_JOIN_TRIES          20                                           /**< Amount of attempts to connect to the OT network */
+
 #define SEARCH_GATEWAY_TIMEOUT 100                                          /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
+#define SEARCH_GATEWAY_TRIES   20                                           /**< Amount of attempts to connect to the MQTT-SN gateway */
 
 #define SCHED_QUEUE_SIZE       32                                           /**< Maximum number of events in the scheduler queue. */
 #define SCHED_EVENT_DATA_SIZE  APP_TIMER_SCHED_EVENT_DATA_SIZE              /**< Maximum app_scheduler event size. */
 
 #define APP_TIM_JOINER_DELAY 200
 #define APP_TIMER_TICKS_TIMEOUT APP_TIMER_TICKS(50)
-//APP_TIMER_DEF(m_joiner_timer);
+
 
 static mqttsn_client_t      m_client;                                       /**< An MQTT-SN client instance. */
 static mqttsn_remote_t      m_gateway_addr;                                 /**< A gateway address. */
 static uint8_t              m_gateway_id;                                   /**< A gateway ID. */
 static mqttsn_connect_opt_t m_connect_opt;                                  /**< Connect options for the MQTT-SN client. */
 static uint16_t             m_msg_id               = 0;                     /**< Message ID thrown with MQTTSN_EVENT_TIMEOUT. */
+static uint8_t              m_gateway_search_tries = SEARCH_GATEWAY_TRIES;  /**< Down-counter of gateway searching attempts */
 
 // THESE SHOULD BE CHANGED ACCORDING TO PROTOCOL ASSUMPTIONS
 // CLIENT ID IS BASED ON EUI64
@@ -70,14 +76,15 @@ static bool g_sub_registered = false;
 static bool g_led_2_on = false;
 static bool g_led_3_on = false;
 
+static uint8_t m_ot_join_tries = OT_JOIN_TRIES;                             /**< Down-counter of OT network searching attempts */
 
 /***************************************************************************************************
  * @section scheduler prototypes
  **************************************************************************************************/
 
-static void sched_send_report(void * p_event_data, uint16_t event_size);
 static void sched_joiner(void * p_event_data, uint16_t event_size);
-static void sched_get_ip(void * p_event_data, uint16_t event_size);
+static void sched_print_ip(void * p_event_data, uint16_t event_size);
+static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size);
 //static void sched_get_device_data(void * p_event_data, uint16_t event_size);
 
 
@@ -87,27 +94,276 @@ static void sched_get_ip(void * p_event_data, uint16_t event_size);
 static void joiner_start(void * p_context);
 static void print_ip_info(void);
 
+
+/***************************************************************************************************
+ * @section OpenThread
+ **************************************************************************************************/
+
+
+/**@brief Function for indicating Thread state change.
+ */
+static void state_changed_callback(uint32_t flags, void * p_context)
+{
+    NRF_LOG_INFO("State changed! Flags: 0x%08x Current role: %d\r\n",
+                 flags, otThreadGetDeviceRole(p_context));
+
+    if (flags & OT_CHANGED_THREAD_NETDATA)
+    {
+        /**
+         * Whenever Thread Network Data is changed, it is necessary to check if generation of global
+         * addresses is needed. This operation is performed internally by the OpenThread CLI module.
+         * To lower power consumption, the examples that implement Thread Sleepy End Device role
+         * don't use the OpenThread CLI module. Therefore otIp6SlaacUpdate util is used to create
+         * IPv6 addresses.
+         */
+         otIp6SlaacUpdate(thread_ot_instance_get(), m_slaac_addresses,
+                          sizeof(m_slaac_addresses) / sizeof(m_slaac_addresses[0]),
+                          otIp6CreateRandomIid, NULL);
+    }
+}
+
+
+/**@brief Function for initializing the Thread Stack.
+ */
+static void thread_instance_init(void)
+{
+    thread_configuration_t thread_configuration =
+    {
+        .role                  = RX_ON_WHEN_IDLE,
+        .autocommissioning     = false,
+        .poll_period           = DEFAULT_POLL_PERIOD,
+        .default_child_timeout = DEFAULT_CHILD_TIMEOUT,
+    };
+
+    thread_init(&thread_configuration);
+    //thread_cli_init();  // DONT NEED THIS ANYMORE ->
+    thread_state_changed_callback_set(state_changed_callback);
+}
+
+
+/**@brief Function for formating IPv6 from typedef to string.
+ */
+void format_ip6(char *str, const otIp6Address* addr)
+{
+    if(addr)
+    {
+        sprintf(str,"%x:%x:%x:%x:%x:%x:%x:%x",
+                addr->mFields.m16[0],
+                addr->mFields.m16[1],
+                addr->mFields.m16[2],
+                addr->mFields.m16[3],
+                addr->mFields.m16[4],
+                addr->mFields.m16[5],
+                addr->mFields.m16[6],
+                addr->mFields.m16[7]);
+    }
+    else
+    {
+        sprintf(str,"NULL");
+    }
+}
+
+
+/**@brief Function for printing IP information via NRF_LOG(RTT).
+ */
+static void print_ip_info(void)
+{
+    char buff[128];
+    const otNetifMulticastAddress *mulAddress
+        = otIp6GetMulticastAddresses(thread_ot_instance_get());
+
+    //otNetifMulticastAddress **_mulAddr = &mulAddress;
+    //otNetifAddress uniAddress = otIp6GetUnicastAdresses(thread_ot_instance_get());
+    if(mulAddress)
+    {
+        for(; mulAddress/*->mNext*/; mulAddress = mulAddress->mNext)
+        {
+            format_ip6(buff,&(mulAddress->mAddress));
+            NRF_LOG_INFO("Multicast Address: %s", nrf_log_push(buff));
+            NRF_LOG_PROCESS();
+        }
+    }
+
+    const otNetifAddress *uniAddress
+        = otIp6GetUnicastAddresses(thread_ot_instance_get());
+
+    if(uniAddress)
+    {
+        for(; uniAddress/*->mNext*/; uniAddress=uniAddress->mNext)
+        {
+            format_ip6(buff,&(uniAddress->mAddress));
+            NRF_LOG_INFO("Unicast Address: %s", nrf_log_push(buff));
+            NRF_LOG_PROCESS();
+        }
+    }
+}
+
+
+/**@brief Callback function for initializing the joiner state.
+ */
+static void joiner_callback(otError aError, void *aContext)
+{
+    switch (aError)
+    {
+        case OT_ERROR_NONE:
+
+            aError = otThreadSetEnabled(thread_ot_instance_get(), true);
+            ASSERT(aError == OT_ERROR_NONE);  // TODO is this a good idea?
+
+            NRF_LOG_INFO("Joiner: network found");
+            app_sched_event_put(NULL, 0, sched_print_ip);
+
+            m_gateway_search_tries = SEARCH_GATEWAY_TRIES; // TODO find better way
+            uint32_t err_code = app_sched_event_put(NULL,
+                                                    0,
+                                                    sched_mqttsn_gw_search);
+            APP_ERROR_CHECK(err_code);
+
+        break;
+
+        case OT_ERROR_SECURITY:
+            NRF_LOG_ERROR("Joiner: failed - credentials");
+        break;
+
+        case OT_ERROR_NOT_FOUND:
+            NRF_LOG_ERROR("Joiner: failed - no network");
+        break;
+
+        case OT_ERROR_RESPONSE_TIMEOUT:
+            NRF_LOG_ERROR("Joiner: failed - timeout");
+        break;
+
+        case OT_ERROR_INVALID_STATE:
+            NRF_LOG_ERROR("Joiner: failed - invalid state");
+        break;
+
+        default:
+        break;
+    }
+
+    if (aError != OT_ERROR_NONE)
+    {
+        m_ot_join_tries--;
+
+        if (m_ot_join_tries > 0)
+        {
+            uint32_t err_code = app_sched_event_put(NULL, 0, sched_joiner);
+            APP_ERROR_CHECK(err_code);
+
+            NRF_LOG_INFO("Trying to join the network once again, tries left:%d",
+                         m_ot_join_tries - 1);
+        }
+        else
+        {
+            NRF_LOG_ERROR("Commissioning failed!\r\nRebooting the device!");
+            NRF_LOG_FLUSH();
+            NVIC_SystemReset(); // reboot
+        }
+    }
+}
+
+
+/**@brief Function for initializing the joiner state.
+ */
+static void joiner_start(void * p_context)
+{
+    otError ret = otJoinerStart(thread_ot_instance_get(),
+                                JOINER_PSKD,
+                                NULL,
+                                VENDOR_NAME,
+                                VENDOR_MODEL,
+                                VENDOR_SW_VER,
+                                VENDOR_DATA,
+                                joiner_callback,
+                                p_context);
+
+    switch(ret)
+    {
+        case OT_ERROR_NONE:
+            NRF_LOG_INFO("Joiner: enabled");
+        break;
+
+        case OT_ERROR_INVALID_ARGS:
+            NRF_LOG_ERROR("Joiner: failed - aPSKd or a ProvisioningUrl is invalid.");
+        break;
+
+        case OT_ERROR_DISABLED_FEATURE:
+            NRF_LOG_ERROR("Joiner: disabled");
+        break;
+
+        default:
+        break;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /***************************************************************************************************
  * @section MQTT-SN
  **************************************************************************************************/
 
-/**@brief Turns the MQTT-SN network indication LED on.
- *
- * @details This LED is on when an MQTT-SN client is in connected or awake state.
- */
-static void light_on(void)
-{
-    LEDS_ON(BSP_LED_3_MASK);
-}
 
+static char str_eui[17]; // TODO Move that to somewhere else
 
-/**@brief Turns the MQTT-SN network indication LED off.
- *
- * @details This LED is on when an MQTT-SN client is in disconnected or asleep state.
+/**@brief Function for printing device commission data
+ * (eui64 and QRcode to generate pattern)
  */
-static void light_off(void)
+static void print_commissioning_info(void)
 {
-    LEDS_OFF(BSP_LED_3_MASK);
+    otExtAddress eui64;
+
+    otLinkGetFactoryAssignedIeeeEui64(thread_ot_instance_get(), &eui64);
+
+    NRF_LOG_PROCESS();
+    NRF_LOG_FLUSH();
+
+    sprintf(str_eui,"%x%x%x%x%x%x%x%x",
+            eui64.m8[0],
+            eui64.m8[1],
+            eui64.m8[2],
+            eui64.m8[3],
+            eui64.m8[4],
+            eui64.m8[5],
+            eui64.m8[6],
+            eui64.m8[7]);
+
+    NRF_LOG_INFO("\r\nEUI64:%s",str_eui);
+    NRF_LOG_INFO("QRCODE: v=1&&eui=%s&&cc=%s", str_eui, JOINER_PSKD);
+    NRF_LOG_INFO("sudo wpanctl commissioner -a %s %s\r\n", JOINER_PSKD, str_eui);
+    NRF_LOG_PROCESS();
 }
 
 
@@ -137,14 +393,103 @@ static void gateway_info_callback(mqttsn_event_t * p_event)
 }
 
 
+/**@brief Function for checking the commissioning status. Triggers the joiner
+ * status if the device is not already commissioned.
+ */
+static void commission_check(void)
+{
+    if (!otDatasetIsCommissioned(thread_ot_instance_get()))
+    {
+        NRF_LOG_INFO("Device is not commissioned yet!");
+
+        print_commissioning_info();
+        m_ot_join_tries = OT_JOIN_TRIES; // TODO find more elegant way
+        app_sched_event_put(NULL, 0, sched_joiner);
+    }
+    else
+    {
+        NRF_LOG_INFO("Device successfully commissioned!");
+        app_sched_event_put(NULL, 0, sched_print_ip);
+    }
+
+    NRF_LOG_PROCESS();
+}
+
+
+/**@brief Processes results of failure to find gateway in specified time.
+ *
+ * @details This function will try to search for the gateway once again
+ *
+ * @param[in]    p_event  Pointer to MQTT-SN event.
+ */
+static void search_gateway_timeout_callback(mqttsn_event_t * p_event)
+{
+    NRF_LOG_INFO("MQTT-SN event: Gateway discovery result: 0x%x.\r\n",
+                 p_event->event_data.discovery);
+
+    if (MQTTSN_SEARCH_GATEWAY_FINISHED == p_event->event_data.discovery)
+    {
+        //gateway already discovered
+    }
+    else
+    {
+        // there are still plenty to parse from 'mqttsn_event_searchgw_t'
+        // here just try once again
+        m_gateway_search_tries--;
+
+        if (m_gateway_search_tries > 0)
+        {
+            uint32_t err_code = app_sched_event_put(NULL,
+                                                    0,
+                                                    sched_mqttsn_gw_search);
+            APP_ERROR_CHECK(err_code);
+
+            NRF_LOG_INFO("Trying to discover the gateway once again, tries left:%d",
+                         m_gateway_search_tries - 1);
+        }
+        else
+        {
+            // ask for commissioning to other network
+            if (OT_ERROR_NONE == otThreadBecomeDetached(thread_ot_instance_get()))
+            {
+                commission_check();
+            }
+            else
+            {
+                // we've got a serious problem, reboot
+                NVIC_SystemReset();
+            }
+        }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /**@brief Processes CONNACK message from a gateway.
  *
  * @details This function launches the topic registration procedure if necessary.
  */
 static void connected_callback(void)
 {
-    light_on();
-
     uint32_t err_code = mqttsn_client_topic_register(&m_client,
                                                      m_topic_pub.p_topic_name,
                                                      strlen(m_topic_name_pub),
@@ -159,8 +504,9 @@ static void connected_callback(void)
 /**@brief Processes DISCONNECT message from a gateway. */
 static void disconnected_callback(void)
 {
-    light_off();
+    return;
 }
+
 
 static void subscribe()
 {
@@ -176,6 +522,8 @@ static void subscribe()
         NRF_LOG_INFO("SUBSCRIBE message successfully sent.");
     }
 }
+
+
 /**@brief Processes REGACK message from a gateway.
  *
  * @param[in] p_event Pointer to MQTT-SN event.
@@ -225,18 +573,6 @@ static void timeout_callback(mqttsn_event_t * p_event)
 }
 
 
-/**@brief Processes results of gateway discovery procedure. */
-static void searchgw_timeout_callback(mqttsn_event_t * p_event)
-{
-    NRF_LOG_INFO("MQTT-SN event: Gateway discovery result: 0x%x.\r\n", p_event->event_data.discovery);
-
-    // if gateway was discovered, turn LED 2 on
-    if (p_event->event_data.discovery == 0)
-    {
-        LEDS_ON(BSP_LED_2_MASK);
-        g_led_2_on = true;
-    }
-}
 
 /**@brief Processes data published by a broker.
  *
@@ -317,7 +653,7 @@ void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_event)
 
         case MQTTSN_EVENT_SEARCHGW_TIMEOUT:
             NRF_LOG_INFO("MQTT-SN event: Gateway discovery procedure has finished.\r\n");
-            searchgw_timeout_callback(p_event);
+            search_gateway_timeout_callback(p_event);
             break;
 
         default:
@@ -328,28 +664,6 @@ void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_event)
 /***************************************************************************************************
  * @section State
  **************************************************************************************************/
-
-static void state_changed_callback(uint32_t flags, void * p_context)
-{
-    NRF_LOG_INFO("State changed! Flags: 0x%08x Current role: %d\r\n",
-                 flags, otThreadGetDeviceRole(p_context));
-
-    if (flags & OT_CHANGED_THREAD_NETDATA)
-    {
-        /**
-         * Whenever Thread Network Data is changed, it is necessary to check if generation of global
-         * addresses is needed. This operation is performed internally by the OpenThread CLI module.
-         * To lower power consumption, the examples that implement Thread Sleepy End Device role
-         * don't use the OpenThread CLI module. Therefore otIp6SlaacUpdate util is used to create
-         * IPv6 addresses.
-         */
-         otIp6SlaacUpdate(thread_ot_instance_get(), m_slaac_addresses,
-                          sizeof(m_slaac_addresses) / sizeof(m_slaac_addresses[0]),
-                          otIp6CreateRandomIid, NULL);
-    }
-
-    app_sched_event_put(NULL, 0, sched_send_report);
-}
 
 static void publish(void)
 {
@@ -382,15 +696,6 @@ static void bsp_event_handler(bsp_event_t event)
             LEDS_OFF(BSP_LED_2_MASK);
             g_led_2_on = false;
 
-            uint32_t err_code = mqttsn_client_search_gateway(&m_client, SEARCH_GATEWAY_TIMEOUT);
-            if (err_code != NRF_SUCCESS)
-            {
-                NRF_LOG_ERROR("SEARCH GATEWAY message could not be sent. Error: 0x%x\r\n", err_code);
-            }
-            else
-            {
-                NRF_LOG_INFO("SEARCH GATEWAY message sent.");
-            }
         }
         break;
 
@@ -483,24 +788,6 @@ static void log_init(void)
 }
 
 
-/**@brief Function for initializing the Thread Stack.
- */
-static void thread_instance_init(void)
-{
-    thread_configuration_t thread_configuration =
-    {
-        .role                  = RX_ON_WHEN_IDLE,
-        .autocommissioning     = false,
-        .poll_period           = DEFAULT_POLL_PERIOD,
-        .default_child_timeout = DEFAULT_CHILD_TIMEOUT,
-    };
-
-    thread_init(&thread_configuration);
-    //thread_cli_init();  // DONT NEED THIS ANYMORE ->
-    thread_state_changed_callback_set(state_changed_callback);
-}
-
-
 /**@brief Function for initializing the MQTTSN client.
  */
 static void mqttsn_init(void)
@@ -514,9 +801,18 @@ static void mqttsn_init(void)
     connect_opt_init();
 }
 
-static void report_on_network()
+
+static void mqttsn_search_gateway(void)
 {
-    return; // MB wrote UDP handling here
+    uint32_t err_code = mqttsn_client_search_gateway(&m_client, SEARCH_GATEWAY_TIMEOUT);
+    if (err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("MQTT-SN message: search gateway could not be sent. Error: 0x%x\r\n", err_code);
+    }
+    else
+    {
+        NRF_LOG_INFO("MQTT-SN message: search gateway sent.");
+    }
 }
 
 
@@ -527,17 +823,20 @@ static void scheduler_init(void)
     APP_SCHED_INIT(SCHED_EVENT_DATA_SIZE, SCHED_QUEUE_SIZE);
 }
 
-static void sched_send_report(void * p_event_data, uint16_t event_size)
-{
-    report_on_network();
-}
+
 static void sched_joiner(void * p_event_data, uint16_t event_size)
 {
     joiner_start(NULL);
 }
-static void sched_get_ip(void * p_event_data, uint16_t event_size)
+
+static void sched_print_ip(void * p_event_data, uint16_t event_size)
 {
     print_ip_info();
+}
+
+static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size)
+{
+    mqttsn_search_gateway();
 }
 
 /*
@@ -558,194 +857,6 @@ static uint32_t start_joiner_timer(void)
 }
 */
 
-static int join_tries = 20;
-/**@brief Callback function for initializing the joiner state.
- */
-static void joiner_callback(otError aError, void *aContext)
-{
-    switch (aError)
-    {
-        case OT_ERROR_NONE:
-            NRF_LOG_INFO("Joiner: success");
-            aError = otThreadSetEnabled(thread_ot_instance_get(), true);
-            //print_ip_info();
-            ASSERT(aError == OT_ERROR_NONE);
-        break;
-
-        case OT_ERROR_SECURITY:
-            NRF_LOG_ERROR("Joiner: failed - credentials");
-        break;
-
-        case OT_ERROR_NOT_FOUND:
-            NRF_LOG_ERROR("Joiner: failed - no network");
-        break;
-
-        case OT_ERROR_RESPONSE_TIMEOUT:
-            NRF_LOG_ERROR("Joiner: failed - timeout");
-        break;
-
-        default:
-        break;
-    }
-
-    if (aError != OT_ERROR_NONE)
-    {
-        join_tries--;
-
-        if (join_tries > 0)
-        {
-            uint32_t err_code = app_sched_event_put(NULL, 0, sched_joiner);
-            APP_ERROR_CHECK(err_code);
-        }
-        else
-        {
-            NRF_LOG_ERROR("Commissioning failed!");
-        }
-    }
-}
-
-
-/**@brief Function for initializing the joiner state.
- */
-static void joiner_start(void * p_context)
-{
-    otError ret = otJoinerStart(thread_ot_instance_get(),
-                                JOINER_PSKD,
-                                NULL,
-                                VENDOR_NAME,
-                                VENDOR_MODEL,
-                                VENDOR_SW_VER,
-                                VENDOR_DATA,
-                                joiner_callback,
-                                p_context);
-
-    switch(ret)
-    {
-        case OT_ERROR_NONE:
-            NRF_LOG_INFO("Joiner: start success");
-        break;
-
-        case OT_ERROR_INVALID_ARGS:
-            NRF_LOG_ERROR("Joiner: aPSKd or a ProvisioningUrl is invalid.");
-        break;
-
-        case OT_ERROR_DISABLED_FEATURE:
-            NRF_LOG_ERROR("Joiner: is not enabled");
-        break;
-
-        default:
-        break;
-    }
-}
-
-
-/**@brief Function for formating IPv6 from typedef to string.
- */
-void format_ip6(char *str, const otIp6Address* addr)
-{
-    if(addr)
-    {
-        sprintf(str,"%x:%x:%x:%x:%x:%x:%x:%x",
-                addr->mFields.m16[0],
-                addr->mFields.m16[1],
-                addr->mFields.m16[2],
-                addr->mFields.m16[3],
-                addr->mFields.m16[4],
-                addr->mFields.m16[5],
-                addr->mFields.m16[6],
-                addr->mFields.m16[7]);
-    }
-    else
-    {
-        sprintf(str,"NULL");
-    }
-}
-
-
-/**@brief Function for printing IP information via NRF_LOG(RTT).
- */
-static void print_ip_info(void)
-{
-    char buff[128];
-    const otNetifMulticastAddress *mulAddress
-        = otIp6GetMulticastAddresses(thread_ot_instance_get());
-
-    //otNetifMulticastAddress **_mulAddr = &mulAddress;
-    //otNetifAddress uniAddress = otIp6GetUnicastAdresses(thread_ot_instance_get());
-    if(mulAddress)
-    {
-        for(; mulAddress/*->mNext*/; mulAddress = mulAddress->mNext)
-        {
-            format_ip6(buff,&(mulAddress->mAddress));
-            NRF_LOG_INFO("Multicast Address: %s", nrf_log_push(buff));
-            NRF_LOG_PROCESS();
-        }
-    }
-
-    const otNetifAddress *uniAddress
-        = otIp6GetUnicastAddresses(thread_ot_instance_get());
-
-    if(uniAddress)
-    {
-        for(; uniAddress/*->mNext*/; uniAddress=uniAddress->mNext)
-        {
-            format_ip6(buff,&(uniAddress->mAddress));
-            NRF_LOG_INFO("Unicast Address: %s", nrf_log_push(buff));
-            NRF_LOG_PROCESS();
-        }
-    }
-}
-
-
-/**@brief Function for checking the commissioning status.
- */
-static void commissioning_check(void)
-{
-    //return; // TODO FIX ME
-
-    if (!otDatasetIsCommissioned(thread_ot_instance_get()))
-    {
-        NRF_LOG_ERROR("Device is not commissioned yet!");
-        app_sched_event_put(NULL, 0, sched_joiner);
-    }
-    else
-    {
-        NRF_LOG_INFO("Device successfully commissioned!");
-        app_sched_event_put(NULL, 0, sched_get_ip);
-    }
-
-    NRF_LOG_PROCESS();
-}
-
-static char str_eui[17];
-
-/**@brief Function for initializing device information
- * (eui64 and QRcode to generate pattern)
- */
-static void device_info_init(void)
-{
-    otExtAddress eui64;
-
-    otLinkGetFactoryAssignedIeeeEui64(thread_ot_instance_get(), &eui64);
-
-    NRF_LOG_PROCESS();
-    NRF_LOG_FLUSH();
-
-    sprintf(str_eui,"%x%x%x%x%x%x%x%x",
-            eui64.m8[0],
-            eui64.m8[1],
-            eui64.m8[2],
-            eui64.m8[3],
-            eui64.m8[4],
-            eui64.m8[5],
-            eui64.m8[6],
-            eui64.m8[7]);
-
-    NRF_LOG_INFO("EUI64:%s",str_eui);
-    NRF_LOG_INFO("QRCODE: v=1&&eui=%s&&cc=%s", str_eui, JOINER_PSKD);
-    NRF_LOG_INFO("sudo wpanctl commissioner -a %s %s", JOINER_PSKD, str_eui);
-    NRF_LOG_PROCESS();
-}
 
 /***************************************************************************************************
  * @section Main
@@ -766,8 +877,7 @@ int main(int argc, char *argv[])
 
     thread_instance_init();
     //init_joiner_timer();
-    commissioning_check();
-    device_info_init();
+    commission_check();
     mqttsn_init();
     //start_joiner_timer();
 
