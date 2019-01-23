@@ -490,6 +490,10 @@ static void search_gateway_timeout_callback(mqttsn_event_t * p_event)
  */
 static void connected_callback(void)
 {
+
+    // TODO
+    // THIS IS THE PLASE WHERE THE CREATION OF SELF SERVICES WILL BE
+    // INITIALIZED
     uint32_t err_code = mqttsn_client_topic_register(&m_client,
                                                      m_topic_pub.p_topic_name,
                                                      strlen(m_topic_name_pub),
