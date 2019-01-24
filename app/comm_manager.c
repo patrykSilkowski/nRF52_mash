@@ -29,8 +29,6 @@ static mqttsn_remote_t      m_gateway_addr;                                 /**<
 static uint8_t              m_gateway_id;                                   /**< A gateway ID. */
 static mqttsn_connect_opt_t m_connect_opt;                                  /**< Connect options for the MQTT-SN client. */
 static uint16_t             m_msg_id               = 0;                     /**< Message ID thrown with MQTTSN_EVENT_TIMEOUT. */
-static uint8_t              m_gateway_search_tries = SEARCH_GATEWAY_TRIES;  /**< Down-counter of gateway searching attempts */
-
 
 // THESE SHOULD BE CHANGED ACCORDING TO PROTOCOL ASSUMPTIONS
 // CLIENT ID IS BASED ON EUI64
@@ -56,36 +54,6 @@ static comm_manager_event_cb m_event_cb[MQTTSN_EVENT_COUNT];
  * @section MQTT-SN handling
  **************************************************************************************************/
 
-
-static char str_eui[17]; // TODO Move that to somewhere else
-
-/**@brief Function for printing device commission data
- * (eui64 and QRcode to generate pattern)
- */
-static void print_commissioning_info(void)
-{
-    otExtAddress eui64;
-
-    otLinkGetFactoryAssignedIeeeEui64(thread_ot_instance_get(), &eui64);
-
-    NRF_LOG_PROCESS();
-    NRF_LOG_FLUSH();
-
-    sprintf(str_eui,"%x%x%x%x%x%x%x%x",
-            eui64.m8[0],
-            eui64.m8[1],
-            eui64.m8[2],
-            eui64.m8[3],
-            eui64.m8[4],
-            eui64.m8[5],
-            eui64.m8[6],
-            eui64.m8[7]);
-
-    NRF_LOG_INFO("\r\nEUI64:%s",str_eui);
-    NRF_LOG_INFO("QRCODE: v=1&&eui=%s&&cc=%s", str_eui, JOINER_PSKD);
-    NRF_LOG_INFO("sudo wpanctl commissioner -a %s %s\r\n", JOINER_PSKD, str_eui);
-    NRF_LOG_PROCESS();
-}
 
 
 /**@brief Initializes MQTT-SN client's connection options.
@@ -318,41 +286,6 @@ static void evt_search_gateway_timeout(mqttsn_event_t * p_event)
 {
     NRF_LOG_INFO("MQTT-SN event: Gateway discovery result: 0x%x.\r\n",
                  p_event->event_data.discovery);
-
-    if (MQTTSN_SEARCH_GATEWAY_FINISHED == p_event->event_data.discovery)
-    {
-        //gateway already discovered
-    }
-    else
-    {
-        // there are still plenty to parse from 'mqttsn_event_searchgw_t'
-        // here just try once again
-        m_gateway_search_tries--;
-
-        if (m_gateway_search_tries > 0)
-        {
-            uint32_t err_code = app_sched_event_put(NULL,
-                                                    0,
-                                                    sched_mqttsn_gw_search);
-            APP_ERROR_CHECK(err_code);
-
-            NRF_LOG_INFO("Trying to discover the gateway once again, tries left:%d",
-                         m_gateway_search_tries - 1);
-        }
-        else
-        {
-            // ask for commissioning to other network
-            if (OT_ERROR_NONE == otThreadBecomeDetached(thread_ot_instance_get()))
-            {
-                commission_check();
-            }
-            else
-            {
-                // we've got a serious problem, reboot
-                NVIC_SystemReset();
-            }
-        }
-    }
 
     execute_callback(p_event);
 }

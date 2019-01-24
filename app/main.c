@@ -53,7 +53,10 @@ static bool g_sub_registered = false;
 static bool g_led_2_on = false;
 static bool g_led_3_on = false;
 
+static char m_str_eui[17];                                                  /**< EUI64 of the device. */
+
 static uint8_t m_ot_join_tries = OT_JOIN_TRIES;                             /**< Down-counter of OT network searching attempts */
+static otDeviceRole m_ot_prev_role = OT_DEVICE_ROLE_DISABLED;               /**< Store device's OT network role */
 
 /***************************************************************************************************
  * @section scheduler prototypes
@@ -81,8 +84,10 @@ static void print_ip_info(void);
  */
 static void thread_state_changed_callback(uint32_t flags, void * p_context)
 {
+    otDeviceRole ot_pres_role = otThreadGetDeviceRole(p_context);
+
     NRF_LOG_INFO("State changed! Flags: 0x%08x Current role: %d\r\n",
-                 flags, otThreadGetDeviceRole(p_context));
+                 flags, ot_pres_role);
 
     if (flags & OT_CHANGED_THREAD_NETDATA)
     {
@@ -97,6 +102,22 @@ static void thread_state_changed_callback(uint32_t flags, void * p_context)
                           sizeof(m_slaac_addresses) / sizeof(m_slaac_addresses[0]),
                           otIp6CreateRandomIid, NULL);
     }
+
+    if (   m_ot_prev_role == OT_DEVICE_ROLE_DETACHED
+        && ot_pres_role   >= OT_DEVICE_ROLE_CHILD   )
+    {
+        /**
+         * If the device has just commissioned and successfully connected to the
+         * Thread Network, start to search MQTT-SN gateway
+         */
+        uint32_t err_code = app_sched_event_put(NULL,
+                                                0,
+                                                sched_mqttsn_gw_search);
+        APP_ERROR_CHECK(err_code);
+    }
+
+    // Store the device role
+    m_ot_prev_role = ot_pres_role;
 }
 
 
@@ -140,6 +161,33 @@ void format_ip6(char *str, const otIp6Address* addr)
     }
 }
 
+/**@brief Function for printing device commission data
+ * (eui64 and QRcode to generate pattern)
+ */
+static void print_commissioning_info(void)
+{
+    otExtAddress eui64;
+
+    otLinkGetFactoryAssignedIeeeEui64(thread_ot_instance_get(), &eui64);
+
+    NRF_LOG_PROCESS();
+    NRF_LOG_FLUSH();
+
+    sprintf(m_str_eui,"%x%x%x%x%x%x%x%x",
+            eui64.m8[0],
+            eui64.m8[1],
+            eui64.m8[2],
+            eui64.m8[3],
+            eui64.m8[4],
+            eui64.m8[5],
+            eui64.m8[6],
+            eui64.m8[7]);
+
+    NRF_LOG_INFO("\r\nEUI64:%s",m_str_eui);
+    NRF_LOG_INFO("QRCODE: v=1&&eui=%s&&cc=%s", m_str_eui, JOINER_PSKD);
+    NRF_LOG_INFO("sudo wpanctl commissioner -a %s %s\r\n", JOINER_PSKD, m_str_eui);
+    NRF_LOG_PROCESS();
+}
 
 /**@brief Function for printing IP information via NRF_LOG(RTT).
  */
@@ -299,8 +347,44 @@ void mqttsn_init(void)
 
 
 
+// TODO -> just do it!
+void gateway_search_callback(void)
+{
+    if (MQTTSN_SEARCH_GATEWAY_FINISHED == p_event->event_data.discovery)
+    {
+        //gateway already discovered
+    }
+    else
+    {
+        // there are still plenty to parse from 'mqttsn_event_searchgw_t'
+        // here just try once again
+        m_gateway_search_tries--;
 
+        if (m_gateway_search_tries > 0)
+        {
+            uint32_t err_code = app_sched_event_put(NULL,
+                                                    0,
+                                                    sched_mqttsn_gw_search);
+            APP_ERROR_CHECK(err_code);
 
+            NRF_LOG_INFO("Trying to discover the gateway once again, tries left:%d",
+                         m_gateway_search_tries - 1);
+        }
+        else
+        {
+            // ask for commissioning to other network
+            if (OT_ERROR_NONE == otThreadBecomeDetached(thread_ot_instance_get()))
+            {
+                commission_check();
+            }
+            else
+            {
+                // we've got a serious problem, reboot
+                NVIC_SystemReset();
+            }
+        }
+    }
+}
 
 
 
