@@ -6,10 +6,12 @@
     protocol usage presented in ../tools/protocol.odt
  */
 
+/* GCC */
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
+/* SDK */
 #include "app_scheduler.h"
 #include "app_timer.h"
 #include "bsp_thread.h"
@@ -17,12 +19,14 @@
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 
-#include "mqttsn_client.h"
 #include "thread_utils.h"
 
 #include <openthread/thread.h>
 #include <openthread/joiner.h>
 
+/* APP */
+#include "comm_manager.h"
+#include "comm_utils.h"
 
 #define VENDOR_NAME   "SIGMA_PS"
 #define VENDOR_MODEL  "1"
@@ -36,8 +40,6 @@
 #define NUM_SLAAC_ADDRESSES    4                                            /**< Number of SLAAC addresses. */
 #define OT_JOIN_TRIES          20                                           /**< Amount of attempts to connect to the OT network */
 
-#define SEARCH_GATEWAY_TIMEOUT 100                                          /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
-#define SEARCH_GATEWAY_TRIES   20                                           /**< Amount of attempts to connect to the MQTT-SN gateway */
 
 #define SCHED_QUEUE_SIZE       32                                           /**< Maximum number of events in the scheduler queue. */
 #define SCHED_EVENT_DATA_SIZE  APP_TIMER_SCHED_EVENT_DATA_SIZE              /**< Maximum app_scheduler event size. */
@@ -45,32 +47,7 @@
 #define APP_TIM_JOINER_DELAY 200
 #define APP_TIMER_TICKS_TIMEOUT APP_TIMER_TICKS(50)
 
-
-static mqttsn_client_t      m_client;                                       /**< An MQTT-SN client instance. */
-static mqttsn_remote_t      m_gateway_addr;                                 /**< A gateway address. */
-static uint8_t              m_gateway_id;                                   /**< A gateway ID. */
-static mqttsn_connect_opt_t m_connect_opt;                                  /**< Connect options for the MQTT-SN client. */
-static uint16_t             m_msg_id               = 0;                     /**< Message ID thrown with MQTTSN_EVENT_TIMEOUT. */
-static uint8_t              m_gateway_search_tries = SEARCH_GATEWAY_TRIES;  /**< Down-counter of gateway searching attempts */
-
-// THESE SHOULD BE CHANGED ACCORDING TO PROTOCOL ASSUMPTIONS
-// CLIENT ID IS BASED ON EUI64
 static otNetifAddress m_slaac_addresses[NUM_SLAAC_ADDRESSES];               /**< Buffer containing addresses resolved by SLAAC */
-
-static char                 m_client_id[]          = "nRF52840";            /**< The MQTT-SN Client's ID. */
-static char                 m_topic_name_pub[]     = "nRF52840/data";       /**< Name of the topic corresponding to subscriber's BSP_LED_2. */
-static mqttsn_topic_t       m_topic_pub            =                        /**< Topic corresponding to subscriber's BSP_LED_2. */
-{
-    .p_topic_name = (unsigned char *)m_topic_name_pub,
-    .topic_id     = 0,
-};
-
-static char                 m_topic_name_sub[]     = "nRF52840/cmd";        /**< Name of the topic corresponding to subscriber's BSP_LED_2. */
-static mqttsn_topic_t       m_topic_sub            =                        /**< Topic corresponding to subscriber's BSP_LED_2. */
-{
-    .p_topic_name = (unsigned char *)m_topic_name_sub,
-    .topic_id     = 0,
-};
 
 static bool g_sub_registered = false;
 static bool g_led_2_on = false;
@@ -102,7 +79,7 @@ static void print_ip_info(void);
 
 /**@brief Function for indicating Thread state change.
  */
-static void state_changed_callback(uint32_t flags, void * p_context)
+static void thread_state_changed_callback(uint32_t flags, void * p_context)
 {
     NRF_LOG_INFO("State changed! Flags: 0x%08x Current role: %d\r\n",
                  flags, otThreadGetDeviceRole(p_context));
@@ -137,7 +114,7 @@ static void thread_instance_init(void)
 
     thread_init(&thread_configuration);
     //thread_cli_init();  // DONT NEED THIS ANYMORE ->
-    thread_state_changed_callback_set(state_changed_callback);
+    thread_state_changed_callback_set(thread_state_changed_callback);
 }
 
 
@@ -299,98 +276,48 @@ static void joiner_start(void * p_context)
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /***************************************************************************************************
  * @section MQTT-SN
  **************************************************************************************************/
 
-
-static char str_eui[17]; // TODO Move that to somewhere else
-
-/**@brief Function for printing device commission data
- * (eui64 and QRcode to generate pattern)
+/*
+ * Most of MQTT-SN services is handled by comm_manager module
  */
-static void print_commissioning_info(void)
+
+
+void mqttsn_init(void)
 {
-    otExtAddress eui64;
+    // register callbacks! !@#$%^&*()_+
 
-    otLinkGetFactoryAssignedIeeeEui64(thread_ot_instance_get(), &eui64);
 
-    NRF_LOG_PROCESS();
-    NRF_LOG_FLUSH();
-
-    sprintf(str_eui,"%x%x%x%x%x%x%x%x",
-            eui64.m8[0],
-            eui64.m8[1],
-            eui64.m8[2],
-            eui64.m8[3],
-            eui64.m8[4],
-            eui64.m8[5],
-            eui64.m8[6],
-            eui64.m8[7]);
-
-    NRF_LOG_INFO("\r\nEUI64:%s",str_eui);
-    NRF_LOG_INFO("QRCODE: v=1&&eui=%s&&cc=%s", str_eui, JOINER_PSKD);
-    NRF_LOG_INFO("sudo wpanctl commissioner -a %s %s\r\n", JOINER_PSKD, str_eui);
-    NRF_LOG_PROCESS();
+    comm_manager_mqttsn_init(thread_ot_instance_get());
 }
 
 
-/**@brief Initializes MQTT-SN client's connection options.
- */
-static void connect_opt_init(void)
-{
-    m_connect_opt.alive_duration = MQTTSN_DEFAULT_ALIVE_DURATION,
-    m_connect_opt.clean_session  = MQTTSN_DEFAULT_CLEAN_SESSION_FLAG,
-    m_connect_opt.will_flag      = MQTTSN_DEFAULT_WILL_FLAG,
-    m_connect_opt.client_id_len  = strlen(m_client_id),
-
-    memcpy(m_connect_opt.p_client_id, (unsigned char *)m_client_id, m_connect_opt.client_id_len);
-}
 
 
-/**@brief Processes GWINFO message from a gateway.
- *
- * @details This function updates MQTT-SN Gateway information.
- *
- * @param[in]    p_event  Pointer to MQTT-SN event.
- */
-static void gateway_info_callback(mqttsn_event_t * p_event)
-{
-    m_gateway_addr = *(p_event->event_data.connected.p_gateway_addr);
-    m_gateway_id   = p_event->event_data.connected.gateway_id;
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 /**@brief Function for checking the commissioning status. Triggers the joiner
@@ -415,255 +342,6 @@ static void commission_check(void)
     NRF_LOG_PROCESS();
 }
 
-
-/**@brief Processes results of failure to find gateway in specified time.
- *
- * @details This function will try to search for the gateway once again
- *
- * @param[in]    p_event  Pointer to MQTT-SN event.
- */
-static void search_gateway_timeout_callback(mqttsn_event_t * p_event)
-{
-    NRF_LOG_INFO("MQTT-SN event: Gateway discovery result: 0x%x.\r\n",
-                 p_event->event_data.discovery);
-
-    if (MQTTSN_SEARCH_GATEWAY_FINISHED == p_event->event_data.discovery)
-    {
-        //gateway already discovered
-    }
-    else
-    {
-        // there are still plenty to parse from 'mqttsn_event_searchgw_t'
-        // here just try once again
-        m_gateway_search_tries--;
-
-        if (m_gateway_search_tries > 0)
-        {
-            uint32_t err_code = app_sched_event_put(NULL,
-                                                    0,
-                                                    sched_mqttsn_gw_search);
-            APP_ERROR_CHECK(err_code);
-
-            NRF_LOG_INFO("Trying to discover the gateway once again, tries left:%d",
-                         m_gateway_search_tries - 1);
-        }
-        else
-        {
-            // ask for commissioning to other network
-            if (OT_ERROR_NONE == otThreadBecomeDetached(thread_ot_instance_get()))
-            {
-                commission_check();
-            }
-            else
-            {
-                // we've got a serious problem, reboot
-                NVIC_SystemReset();
-            }
-        }
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-/**@brief Processes CONNACK message from a gateway.
- *
- * @details This function launches the topic registration procedure if necessary.
- */
-static void connected_callback(void)
-{
-
-    // TODO
-    // THIS IS THE PLASE WHERE THE CREATION OF SELF SERVICES WILL BE
-    // INITIALIZED
-    uint32_t err_code = mqttsn_client_topic_register(&m_client,
-                                                     m_topic_pub.p_topic_name,
-                                                     strlen(m_topic_name_pub),
-                                                     &m_msg_id);
-    if (err_code != NRF_SUCCESS)
-    {
-        NRF_LOG_ERROR("REGISTER message could not be sent. Error code: 0x%x\r\n", err_code);
-    }
-}
-
-
-/**@brief Processes DISCONNECT message from a gateway. */
-static void disconnected_callback(void)
-{
-    return;
-}
-
-
-static void subscribe()
-{
-    uint8_t  topic_name_len = strlen(m_topic_name_sub);
-    uint32_t err_code = mqttsn_client_subscribe(&m_client,
-        m_topic_sub.p_topic_name, topic_name_len, &m_msg_id);
-    if (err_code != NRF_SUCCESS)
-    {
-        NRF_LOG_ERROR("SUBSCRIBE message could not be sent.\r\n");
-    }
-    else
-    {
-        NRF_LOG_INFO("SUBSCRIBE message successfully sent.");
-    }
-}
-
-
-/**@brief Processes REGACK message from a gateway.
- *
- * @param[in] p_event Pointer to MQTT-SN event.
- */
-static void regack_callback(mqttsn_event_t * p_event)
-{
-    NRF_LOG_INFO("MQTT-SN event: Topic has been registered with ID: %d.\r\n",
-                 p_event->event_data.registered.packet.topic.topic_id);
-
-    // register subscriber if not already registered
-    if (!g_sub_registered)
-    {
-        m_topic_pub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
-
-        g_sub_registered = true;
-
-        uint32_t err_code = mqttsn_client_topic_register(&m_client,
-                                                     m_topic_sub.p_topic_name,
-                                                     strlen(m_topic_name_sub),
-                                                     &m_msg_id);
-        if (err_code != NRF_SUCCESS)
-        {
-            NRF_LOG_ERROR("REGISTER message could not be sent. Error code: 0x%x\r\n", err_code);
-        }
-        else
-        {
-            NRF_LOG_INFO("REGISTER message successfully sent.");
-        }
-    }
-    else
-    {
-        // store id
-        m_topic_sub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
-
-        // subscribe
-        subscribe();
-    }
-}
-
-
-/**@brief Processes retransmission limit reached event. */
-static void timeout_callback(mqttsn_event_t * p_event)
-{
-    NRF_LOG_INFO("MQTT-SN event: Timed-out message: %d. Message ID: %d.\r\n",
-                  p_event->event_data.error.msg_type,
-                  p_event->event_data.error.msg_id);
-}
-
-
-
-/**@brief Processes data published by a broker.
- *
- * @details This function processes LED command.
- */
-static void received_callback(mqttsn_event_t * p_event)
-{
-    if (p_event->event_data.published.packet.topic.topic_id == m_topic_sub.topic_id)
-    {
-        uint8_t* p_data = p_event->event_data.published.p_payload;
-        NRF_LOG_INFO("MQTT-SN event: Content to subscribed topic received.\r\n");
-        NRF_LOG_INFO("Topic id: %d, data: %5s",
-            p_event->event_data.published.packet.topic.topic_id,
-            p_data);
-
-        // turn LEDs on/off
-        if (p_data[0] == '1') {
-            LEDS_ON(BSP_LED_2_MASK);
-            g_led_2_on = true;
-        }
-        else {
-            LEDS_OFF(BSP_LED_2_MASK);
-            g_led_2_on = false;
-        }
-    }
-    else
-    {
-        NRF_LOG_INFO("MQTT-SN event: Content to unsubscribed topic received. Dropping packet.\r\n");
-    }
-}
-
-/**@brief Function for handling MQTT-SN events. */
-void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_event)
-{
-    switch(p_event->event_id)
-    {
-        case MQTTSN_EVENT_GATEWAY_FOUND:
-            NRF_LOG_INFO("MQTT-SN event: Client has found an active gateway.\r\n");
-            gateway_info_callback(p_event);
-            break;
-
-        case MQTTSN_EVENT_CONNECTED:
-            NRF_LOG_INFO("MQTT-SN event: Client connected.\r\n");
-            connected_callback();
-            break;
-
-        case MQTTSN_EVENT_DISCONNECT_PERMIT:
-            NRF_LOG_INFO("MQTT-SN event: Client disconnected.\r\n");
-            disconnected_callback();
-            break;
-
-        case MQTTSN_EVENT_REGISTERED:
-            NRF_LOG_INFO("MQTT-SN event: Client registered topic.\r\n");
-            regack_callback(p_event);
-            break;
-
-        case MQTTSN_EVENT_PUBLISHED:
-            NRF_LOG_INFO("MQTT-SN event: Client has successfully published content.\r\n");
-            break;
-
-        case MQTTSN_EVENT_SUBSCRIBED:
-            NRF_LOG_INFO("MQTT-SN event: Client subscribed to topic.\r\n");
-            break;
-
-        case MQTTSN_EVENT_UNSUBSCRIBED:
-            NRF_LOG_INFO("MQTT-SN event: Client unsubscribed to topic.\r\n");
-            break;
-
-        case MQTTSN_EVENT_RECEIVED:
-            NRF_LOG_INFO("MQTT-SN event: Client received content.\r\n");
-            received_callback(p_event);
-            break;
-
-        case MQTTSN_EVENT_TIMEOUT:
-            NRF_LOG_INFO("MQTT-SN event: Retransmission retries limit has been reached.\r\n");
-            timeout_callback(p_event);
-            break;
-
-        case MQTTSN_EVENT_SEARCHGW_TIMEOUT:
-            NRF_LOG_INFO("MQTT-SN event: Gateway discovery procedure has finished.\r\n");
-            search_gateway_timeout_callback(p_event);
-            break;
-
-        default:
-            break;
-    }
-}
 
 /***************************************************************************************************
  * @section State
@@ -792,34 +470,6 @@ static void log_init(void)
 }
 
 
-/**@brief Function for initializing the MQTTSN client.
- */
-static void mqttsn_init(void)
-{
-    uint32_t err_code = mqttsn_client_init(&m_client,
-                                           MQTTSN_DEFAULT_CLIENT_PORT,
-                                           mqttsn_evt_handler,
-                                           thread_ot_instance_get());
-    APP_ERROR_CHECK(err_code);
-
-    connect_opt_init();
-}
-
-
-static void mqttsn_search_gateway(void)
-{
-    uint32_t err_code = mqttsn_client_search_gateway(&m_client, SEARCH_GATEWAY_TIMEOUT);
-    if (err_code != NRF_SUCCESS)
-    {
-        NRF_LOG_ERROR("MQTT-SN message: search gateway could not be sent. Error: 0x%x\r\n", err_code);
-    }
-    else
-    {
-        NRF_LOG_INFO("MQTT-SN message: search gateway sent.");
-    }
-}
-
-
 /**@brief Function for initializing scheduler module.
  */
 static void scheduler_init(void)
@@ -840,7 +490,7 @@ static void sched_print_ip(void * p_event_data, uint16_t event_size)
 
 static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size)
 {
-    mqttsn_search_gateway();
+    comm_manager_search_gateway();
 }
 
 /*
