@@ -18,7 +18,7 @@
 #include "nrf_log_default_backends.h"
 
 
-#define SEARCH_GATEWAY_TIMEOUT      100                                     /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
+#define SEARCH_GATEWAY_TIMEOUT      30                                      /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
 #define SEARCH_GATEWAY_TRIES        20                                      /**< Amount of attempts to connect to the MQTT-SN gateway */
 
 #define MQTTSN_EVENT_COUNT          16                                      /**< Amount of MQTT-SN events. */
@@ -153,7 +153,7 @@ static void evt_registered(mqttsn_event_t * p_event)
                  p_event->event_data.registered.packet.topic.topic_id);
 
     // register subscriber if not already registered
-    if (true)
+    if (0)
     {
         m_topic_pub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
 
@@ -319,7 +319,7 @@ static void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_ev
         break;
 
         case MQTTSN_EVENT_SEARCHGW_TIMEOUT:
-            NRF_LOG_INFO("MQTT-SN event: Gateway discovery procedure has finished.\r\n");
+            NRF_LOG_INFO("MQTT-SN event: Gateway discovery procedure timeout.\r\n");
             evt_search_gateway_timeout(p_event);
         break;
 
@@ -359,14 +359,36 @@ void comm_manager_mqttsn_init(const void * p_transport)
  */
 void comm_manager_search_gateway(void)
 {
-    uint32_t err_code = mqttsn_client_search_gateway(&m_client, SEARCH_GATEWAY_TIMEOUT);
+    uint32_t err_code = mqttsn_client_search_gateway(&m_client,
+                                                     SEARCH_GATEWAY_TIMEOUT);
+
     if (err_code != NRF_SUCCESS)
     {
-        NRF_LOG_ERROR("MQTT-SN message: search gateway could not be sent. Error: 0x%x\r\n", err_code);
+        NRF_LOG_ERROR("MQTT-SN: search gateway error: 0x%x\r\n", err_code);
     }
     else
     {
-        NRF_LOG_INFO("MQTT-SN message: search gateway sent.");
+        NRF_LOG_INFO("MQTT-SN: search gateway sent.");
+    }
+}
+
+
+/**@brief Function for connecting to the MQTTSN gateway.
+ */
+void comm_manager_connect_to_gateway(void)
+{
+    uint32_t err_code = mqttsn_client_connect(&m_client,
+                                              &m_gateway_addr,
+                                              m_gateway_id,
+                                              &m_connect_opt);
+
+    if (err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("MQTT-SN: connect to gateway error: 0x%x\r\n", err_code);
+    }
+    else
+    {
+        NRF_LOG_INFO("MQTT-SN: connect to gateway sent.");
     }
 }
 

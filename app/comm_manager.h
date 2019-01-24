@@ -27,6 +27,8 @@ void comm_manager_mqttsn_init(const void * p_transport);
 
 void comm_manager_search_gateway(void);
 
+void comm_manager_connect_to_gateway(void);
+
 void comm_manager_set_evt_gateway_found_cb(comm_manager_event_cb cb);
 
 void comm_manager_set_evt_connected_cb(comm_manager_event_cb cb);

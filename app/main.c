@@ -63,6 +63,7 @@ static otDeviceRole m_ot_prev_role = OT_DEVICE_ROLE_DISABLED;               /**<
 static void sched_joiner(void * p_event_data, uint16_t event_size);
 static void sched_print_ip(void * p_event_data, uint16_t event_size);
 static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size);
+static void sched_mqttsn_gw_connect(void * p_event_data, uint16_t event_size);
 static void sched_ot_recommissioning(void * p_event_data, uint16_t event_size);
 
 
@@ -358,8 +359,8 @@ static void thread_detach_and_commission(void)
 
 /*
  * Most of MQTT-SN services is handled by comm_manager module
+ * Passing callbacks to corresponding events
  */
-
 
 static int8_t gateway_search_callback(mqttsn_event_t * p_event)
 {
@@ -397,9 +398,21 @@ static int8_t gateway_search_callback(mqttsn_event_t * p_event)
 }
 
 
+static int8_t gateway_found_callback(mqttsn_event_t * p_event)
+{
+    /**
+     * Just schedule the connection after the successful search
+     */
+    return (int8_t) app_sched_event_put(NULL,
+                                        0,
+                                        sched_mqttsn_gw_connect);
+}
+
+
 static void mqttsn_init(void)
 {
     comm_manager_set_evt_gateway_search_timeout_cb(gateway_search_callback);
+    comm_manager_set_evt_gateway_found_cb(gateway_found_callback);
 
     comm_manager_mqttsn_init(thread_ot_instance_get());
 }
@@ -556,6 +569,11 @@ static void sched_print_ip(void * p_event_data, uint16_t event_size)
 static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size)
 {
     comm_manager_search_gateway();
+}
+
+static void sched_mqttsn_gw_connect(void * p_event_data, uint16_t event_size)
+{
+    comm_manager_connect_to_gateway();
 }
 
 static void sched_ot_recommissioning(void * p_event_data, uint16_t event_size)
