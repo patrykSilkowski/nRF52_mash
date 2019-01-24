@@ -49,9 +49,7 @@
 
 static otNetifAddress m_slaac_addresses[NUM_SLAAC_ADDRESSES];               /**< Buffer containing addresses resolved by SLAAC */
 
-static bool g_sub_registered = false;
 static bool g_led_2_on = false;
-static bool g_led_3_on = false;
 
 static char m_str_eui[17];                                                  /**< EUI64 of the device. */
 
@@ -65,7 +63,7 @@ static otDeviceRole m_ot_prev_role = OT_DEVICE_ROLE_DISABLED;               /**<
 static void sched_joiner(void * p_event_data, uint16_t event_size);
 static void sched_print_ip(void * p_event_data, uint16_t event_size);
 static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size);
-//static void sched_get_device_data(void * p_event_data, uint16_t event_size);
+static void sched_ot_recommissioning(void * p_event_data, uint16_t event_size);
 
 
 /***************************************************************************************************
@@ -104,7 +102,7 @@ static void thread_state_changed_callback(uint32_t flags, void * p_context)
     }
 
     if (   m_ot_prev_role == OT_DEVICE_ROLE_DETACHED
-        && ot_pres_role   >= OT_DEVICE_ROLE_CHILD   )
+        &&   ot_pres_role >= OT_DEVICE_ROLE_CHILD   )
     {
         /**
          * If the device has just commissioned and successfully connected to the
@@ -141,7 +139,7 @@ static void thread_instance_init(void)
 
 /**@brief Function for formating IPv6 from typedef to string.
  */
-void format_ip6(char *str, const otIp6Address* addr)
+static void format_ip6(char *str, const otIp6Address* addr)
 {
     if(addr)
     {
@@ -231,19 +229,13 @@ static void joiner_callback(otError aError, void *aContext)
     switch (aError)
     {
         case OT_ERROR_NONE:
+            NRF_LOG_INFO("Joiner: success - network found");
 
             aError = otThreadSetEnabled(thread_ot_instance_get(), true);
             ASSERT(aError == OT_ERROR_NONE);  // TODO is this a good idea?
 
-            NRF_LOG_INFO("Joiner: network found");
-            app_sched_event_put(NULL, 0, sched_print_ip);
-
-            m_gateway_search_tries = SEARCH_GATEWAY_TRIES; // TODO find better way
-            uint32_t err_code = app_sched_event_put(NULL,
-                                                    0,
-                                                    sched_mqttsn_gw_search);
+            uint32_t err_code = app_sched_event_put(NULL, 0, sched_print_ip);
             APP_ERROR_CHECK(err_code);
-
         break;
 
         case OT_ERROR_SECURITY:
@@ -322,88 +314,6 @@ static void joiner_start(void * p_context)
 }
 
 
-
-
-/***************************************************************************************************
- * @section MQTT-SN
- **************************************************************************************************/
-
-/*
- * Most of MQTT-SN services is handled by comm_manager module
- */
-
-
-void mqttsn_init(void)
-{
-    // register callbacks! !@#$%^&*()_+
-
-
-    comm_manager_mqttsn_init(thread_ot_instance_get());
-}
-
-
-
-
-
-
-
-// TODO -> just do it!
-void gateway_search_callback(void)
-{
-    if (MQTTSN_SEARCH_GATEWAY_FINISHED == p_event->event_data.discovery)
-    {
-        //gateway already discovered
-    }
-    else
-    {
-        // there are still plenty to parse from 'mqttsn_event_searchgw_t'
-        // here just try once again
-        m_gateway_search_tries--;
-
-        if (m_gateway_search_tries > 0)
-        {
-            uint32_t err_code = app_sched_event_put(NULL,
-                                                    0,
-                                                    sched_mqttsn_gw_search);
-            APP_ERROR_CHECK(err_code);
-
-            NRF_LOG_INFO("Trying to discover the gateway once again, tries left:%d",
-                         m_gateway_search_tries - 1);
-        }
-        else
-        {
-            // ask for commissioning to other network
-            if (OT_ERROR_NONE == otThreadBecomeDetached(thread_ot_instance_get()))
-            {
-                commission_check();
-            }
-            else
-            {
-                // we've got a serious problem, reboot
-                NVIC_SystemReset();
-            }
-        }
-    }
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /**@brief Function for checking the commissioning status. Triggers the joiner
  * status if the device is not already commissioned.
  */
@@ -427,13 +337,82 @@ static void commission_check(void)
 }
 
 
+static void thread_detach_and_commission(void)
+{
+    // ask for commissioning to other network
+    if (OT_ERROR_NONE == otThreadBecomeDetached(thread_ot_instance_get()))
+    {
+        commission_check();
+    }
+    else
+    {
+        // we've got a serious problem, reboot
+        NVIC_SystemReset();
+    }
+}
+
+
+/***************************************************************************************************
+ * @section MQTT-SN
+ **************************************************************************************************/
+
+/*
+ * Most of MQTT-SN services is handled by comm_manager module
+ */
+
+
+static int8_t gateway_search_callback(mqttsn_event_t * p_event)
+{
+    int8_t ret = CONN_MGR_SUCCESS;
+
+    switch (p_event->event_data.discovery)
+    {
+        case MQTTSN_SEARCH_GATEWAY_FINISHED:
+            //gateway already discovered
+        break;
+
+        case MQTTSN_SEARCH_GATEWAY_TRANSPORT_FAILED:
+            ret = (int8_t) app_sched_event_put(NULL,
+                                               0,
+                                               sched_ot_recommissioning);
+        break;
+
+        case MQTTSN_SEARCH_GATEWAY_PLATFORM_FAILED:
+            // we've got a serious problem, reboot
+            NVIC_SystemReset();
+        break;
+
+        case MQTTSN_SEARCH_GATEWAY_NO_GATEWAY_FOUND:
+            ret = (int8_t) app_sched_event_put(NULL,
+                                               0,
+                                               sched_ot_recommissioning);
+        break;
+
+        default:
+            ret = -1;
+        break;
+    } // end of switch
+
+    return ret;
+}
+
+
+static void mqttsn_init(void)
+{
+    comm_manager_set_evt_gateway_search_timeout_cb(gateway_search_callback);
+
+    comm_manager_mqttsn_init(thread_ot_instance_get());
+}
+
+
 /***************************************************************************************************
  * @section State
  **************************************************************************************************/
 
 static void publish(void)
 {
-    char* pub_data = g_led_2_on ? "1" : "0";
+    //char* pub_data = g_led_2_on ? "1" : "0";
+    /*
     uint32_t err_code = mqttsn_client_publish(&m_client, m_topic_pub.topic_id,
         (uint8_t*)pub_data, strlen(pub_data), &m_msg_id);
     if (err_code != NRF_SUCCESS)
@@ -444,6 +423,7 @@ static void publish(void)
     {
         NRF_LOG_INFO("PUBLISH successfully sent.");
     }
+    */
 }
 
 static void bsp_event_handler(bsp_event_t event)
@@ -467,8 +447,8 @@ static void bsp_event_handler(bsp_event_t event)
 
         case BSP_EVENT_KEY_2:
         {
-            uint32_t err_code;
-
+            // uint32_t err_code;
+            /*
             if (mqttsn_client_state_get(&m_client) == MQTTSN_CLIENT_CONNECTED)
             {
                 err_code = mqttsn_client_disconnect(&m_client);
@@ -497,6 +477,7 @@ static void bsp_event_handler(bsp_event_t event)
                     NRF_LOG_INFO("CONNECT MQTT-SN CLIENT message sent.");
                 }
             }
+            */
         }
         break;
 
@@ -577,23 +558,10 @@ static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size)
     comm_manager_search_gateway();
 }
 
-/*
-static void sched_get_device_data(void * p_event_data, uint16_t event_size)
+static void sched_ot_recommissioning(void * p_event_data, uint16_t event_size)
 {
-    return;
+    thread_detach_and_commission();
 }
-*/
-
-/**@brief Function for triggering timer which handles the joiner state.
- */
- /*
-static uint32_t start_joiner_timer(void)
-{
-    return app_timer_start(m_joiner_timer,
-                           APP_TIMER_TICKS(APP_TIM_JOINER_DELAY),
-                           thread_ot_instance_get());
-}
-*/
 
 
 /***************************************************************************************************

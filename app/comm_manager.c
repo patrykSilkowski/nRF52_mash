@@ -18,7 +18,6 @@
 #include "nrf_log_default_backends.h"
 
 
-
 #define SEARCH_GATEWAY_TIMEOUT      100                                     /**< MQTT-SN Gateway discovery procedure timeout in [s]. */
 #define SEARCH_GATEWAY_TRIES        20                                      /**< Amount of attempts to connect to the MQTT-SN gateway */
 
@@ -55,7 +54,6 @@ static comm_manager_event_cb m_event_cb[MQTTSN_EVENT_COUNT];
  **************************************************************************************************/
 
 
-
 /**@brief Initializes MQTT-SN client's connection options.
  */
 static void connect_opt_init(void)
@@ -67,15 +65,6 @@ static void connect_opt_init(void)
 
     memcpy(m_connect_opt.p_client_id, (unsigned char *)m_client_id, m_connect_opt.client_id_len);
 }
-
-
-
-
-
-
-
-
-
 
 
 static void subscribe()
@@ -92,7 +81,6 @@ static void subscribe()
         NRF_LOG_INFO("SUBSCRIBE message successfully sent.");
     }
 }
-
 
 
 
@@ -149,7 +137,7 @@ static void evt_connected(mqttsn_event_t * p_event)
 
 
 /**@brief Processes DISCONNECT message from a gateway. */
-static void evt_disconnect_permit(p_event)
+static void evt_disconnect_permit(mqttsn_event_t * p_event)
 {
     execute_callback(p_event);
 }
@@ -165,11 +153,9 @@ static void evt_registered(mqttsn_event_t * p_event)
                  p_event->event_data.registered.packet.topic.topic_id);
 
     // register subscriber if not already registered
-    if (!g_sub_registered)
+    if (true)
     {
         m_topic_pub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
-
-        g_sub_registered = true;
 
         uint32_t err_code = mqttsn_client_topic_register(&m_client,
                                                      m_topic_sub.p_topic_name,
@@ -201,7 +187,7 @@ static void evt_registered(mqttsn_event_t * p_event)
  *
  * @param[in] p_event Pointer to MQTT-SN event.
  */
-static void evt_published(p_event)
+static void evt_published(mqttsn_event_t * p_event)
 {
     execute_callback(p_event);
 }
@@ -211,7 +197,7 @@ static void evt_published(p_event)
  *
  * @param[in] p_event Pointer to MQTT-SN event.
  */
-static void evt_subscribed(p_event)
+static void evt_subscribed(mqttsn_event_t * p_event)
 {
     execute_callback(p_event);
 }
@@ -220,7 +206,7 @@ static void evt_subscribed(p_event)
  *
  * @param[in] p_event Pointer to MQTT-SN event.
  */
-static void evt_unsubscribed(p_event)
+static void evt_unsubscribed(mqttsn_event_t * p_event)
 {
     execute_callback(p_event);
 }
@@ -240,15 +226,6 @@ static void evt_received(mqttsn_event_t * p_event)
             p_event->event_data.published.packet.topic.topic_id,
             p_data);
 
-        // turn LEDs on/off
-        if (p_data[0] == '1') {
-            LEDS_ON(BSP_LED_2_MASK);
-            g_led_2_on = true;
-        }
-        else {
-            LEDS_OFF(BSP_LED_2_MASK);
-            g_led_2_on = false;
-        }
     }
     else
     {
