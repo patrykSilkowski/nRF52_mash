@@ -393,6 +393,61 @@ void comm_manager_connect_to_gateway(void)
 }
 
 
+
+
+int8_t comm_manager_topic_register(const uint8_t * p_topic_name,
+                                        uint16_t * msg_id)
+{
+    uint32_t err_code = mqttsn_client_topic_register(&m_client,
+                                                     p_topic_name,
+                                                     strlen(p_topic_name),
+                                                     msg_id);
+    if (err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("MQTT-SN: register error: 0x%x\r\n", err_code);
+    }
+    else
+    {
+        NRF_LOG_INFO("MQTT-SN: register sent.");
+    }
+
+    return (int8_t) err_code;
+}
+
+
+int8_t comm_manager_topic_subscribe(const uint8_t * p_topic_name,
+                                         uint16_t * msg_id)
+{
+    uint32_t err_code = mqttsn_client_subscribe(&m_client,
+                                                p_topic_name,
+                                                strlen(p_topic_name),
+                                                msg_id);
+    if (err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("MQTT-SN: subscribe error: 0x%x\r\n", err_code);
+    }
+    else
+    {
+        NRF_LOG_INFO("MQTT-SN: subscribe sent.");
+    }
+
+    return (int8_t) err_code;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 void comm_manager_set_evt_gateway_found_cb(comm_manager_event_cb cb)
 {
     m_event_cb[MQTTSN_EVENT_GATEWAY_FOUND] = cb;

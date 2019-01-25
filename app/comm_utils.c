@@ -98,6 +98,7 @@ unsigned char* comm_utils_get_id(void)
 }
 
 
+// TODO consider using otLinkGetFactoryAssignedIeeeEui64 instead of inner registers
 void comm_utils_id_gen(void)
 {
   size_t len;

@@ -49,5 +49,17 @@ void comm_manager_set_evt_timeout_cb(comm_manager_event_cb cb);
 
 void comm_manager_set_evt_gateway_search_timeout_cb(comm_manager_event_cb cb);
 
+/**@brief Function for register the MQTTSN topic to the gateway.
+ */
+int8_t comm_manager_topic_register(const uint8_t * p_topic_name,
+                                        uint16_t * msg_id);
+
+/**@brief Function for subscribe to MQTTSN topic.
+ */
+int8_t comm_manager_topic_subscribe(const uint8_t * p_topic_name,
+                                         uint16_t * msg_id);
+
+
+
 
 #endif /* APP_COMM_MANAGER_H_ */

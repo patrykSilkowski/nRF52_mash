@@ -22,6 +22,16 @@
 
 #define SERVICE_STR_MAX_LENGTH    13
 
+#define SERVICE_MSG_OFF            "off"
+#define SERVICE_MSG_ON             "on"
+
+typedef enum {
+    lightbulb = 0,
+    wall_switch,
+    relay,
+    thermometer,
+    info_none
+} service_info_t;
 
 typedef enum {
     info,
