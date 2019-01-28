@@ -123,15 +123,6 @@ static void evt_connected(mqttsn_event_t * p_event)
     // TODO
     // THIS IS THE PLASE WHERE THE CREATION OF SELF SERVICES WILL BE
     // INITIALIZED
-    uint32_t err_code = mqttsn_client_topic_register(&m_client,
-                                                     m_topic_pub.p_topic_name,
-                                                     strlen(m_topic_name_pub),
-                                                     &m_msg_id);
-    if (err_code != NRF_SUCCESS)
-    {
-        NRF_LOG_ERROR("REGISTER message could not be sent. Error code: 0x%x\r\n", err_code);
-    }
-
     execute_callback(p_event);
 }
 
@@ -151,33 +142,6 @@ static void evt_registered(mqttsn_event_t * p_event)
 {
     NRF_LOG_INFO("MQTT-SN event: Topic has been registered with ID: %d.\r\n",
                  p_event->event_data.registered.packet.topic.topic_id);
-
-    // register subscriber if not already registered
-    if (0)
-    {
-        m_topic_pub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
-
-        uint32_t err_code = mqttsn_client_topic_register(&m_client,
-                                                     m_topic_sub.p_topic_name,
-                                                     strlen(m_topic_name_sub),
-                                                     &m_msg_id);
-        if (err_code != NRF_SUCCESS)
-        {
-            NRF_LOG_ERROR("REGISTER message could not be sent. Error code: 0x%x\r\n", err_code);
-        }
-        else
-        {
-            NRF_LOG_INFO("REGISTER message successfully sent.");
-        }
-    }
-    else
-    {
-        // store id
-        m_topic_sub.topic_id = p_event->event_data.registered.packet.topic.topic_id;
-
-        // subscribe
-        subscribe();
-    }
 
     execute_callback(p_event);
 }

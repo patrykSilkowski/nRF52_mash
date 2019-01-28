@@ -27,6 +27,8 @@
 /* APP */
 #include "comm_manager.h"
 #include "comm_utils.h"
+#include "service_bsp.h"
+#include "service_setup.h"
 
 #define VENDOR_NAME   "SIGMA_PS"
 #define VENDOR_MODEL  "1"
@@ -65,6 +67,9 @@ static void sched_print_ip(void * p_event_data, uint16_t event_size);
 static void sched_mqttsn_gw_search(void * p_event_data, uint16_t event_size);
 static void sched_mqttsn_gw_connect(void * p_event_data, uint16_t event_size);
 static void sched_ot_recommissioning(void * p_event_data, uint16_t event_size);
+static void sched_start_services(void * p_event_data, uint16_t event_size);
+static void sched_registed_service(void * p_event_data, uint16_t event_size);
+static void sched_subscribed_service(void * p_event_data, uint16_t event_size);
 
 
 /***************************************************************************************************
@@ -409,10 +414,47 @@ static int8_t gateway_found_callback(mqttsn_event_t * p_event)
 }
 
 
+static int8_t connected_to_gateway_callback(mqttsn_event_t * p_event)
+{
+    /**
+     * Just schedule the service creator startup
+     */
+    return (int8_t) app_sched_event_put(NULL,
+                                        0,
+                                        sched_start_services);
+}
+
+
+static int8_t register_acknowledge_callback(mqttsn_event_t * p_event)
+{
+    /**
+     * Just schedule the register service handler
+     */
+    return (int8_t) app_sched_event_put(p_event,
+                                        sizeof(mqttsn_event_t *),
+                                        sched_registed_service);
+}
+
+
+static int8_t subscription_acknowledge_callback(mqttsn_event_t * p_event)
+{
+    /**
+     * Just schedule the subscript service handler
+     */
+    return (int8_t) app_sched_event_put(p_event,
+                                        sizeof(mqttsn_event_t *),
+                                        sched_subscribed_service);
+}
+
+
 static void mqttsn_init(void)
 {
     comm_manager_set_evt_gateway_search_timeout_cb(gateway_search_callback);
     comm_manager_set_evt_gateway_found_cb(gateway_found_callback);
+    comm_manager_set_evt_connected_cb(connected_to_gateway_callback);
+    comm_manager_set_evt_registered_cb(register_acknowledge_callback);
+    comm_manager_set_evt_subscribed_cb(subscription_acknowledge_callback);
+
 
     comm_manager_mqttsn_init(thread_ot_instance_get());
 }
@@ -581,6 +623,70 @@ static void sched_ot_recommissioning(void * p_event_data, uint16_t event_size)
     thread_detach_and_commission();
 }
 
+static void sched_start_services(void * p_event_data, uint16_t event_size)
+{
+    int8_t err_code = create_self_services_init();
+
+    if (err_code)
+    {
+        NRF_LOG_ERROR("Service: creator initialize error: %d\r\n", err_code);
+    }
+}
+
+static void sched_registed_service(void * p_event_data, uint16_t event_size)
+{
+    mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
+
+    int8_t err_code = service_subscribe_to_registered(
+        p_evt->event_data.registered.packet.id,
+        p_evt->event_data.registered.packet.topic.topic_id);
+
+    if (err_code)
+    {
+        NRF_LOG_ERROR("Service: subscription to registered topic error: %d\r\n",
+                      err_code);
+    }
+}
+
+static void sched_subscribed_service(void * p_event_data, uint16_t event_size)
+{
+    mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
+
+    int8_t err_code = service_insert_to_database(
+        p_evt->event_data.registered.packet.id,
+        p_evt->event_data.registered.packet.topic.topic_id);
+
+    if (err_code)
+    {
+        NRF_LOG_ERROR("Service: subscription of topic with ID:%d returned with error: %d\r\n",
+                      p_evt->event_data.registered.packet.topic.topic_id,
+                      err_code);
+
+        //TODO think about handling such error
+        // -> give up and try to register next one
+        // -> retry to register this one
+    }
+    else
+    {
+        NRF_LOG_INFO("Service: function with ID:%d successfully added.\r\n",
+                     p_evt->event_data.registered.packet.topic.topic_id);
+    }
+
+    err_code = create_self_services_continue();
+
+    if (SERVICE_ALL_REGISTERED_FLAG == err_code)
+    {
+        NRF_LOG_INFO("Service: all self functions has been added.\r\n",
+                     p_evt->event_data.registered.packet.topic.topic_id);
+    }
+    else if (err_code)
+    {
+        NRF_LOG_ERROR("Service: register of next function error: %d\r\n", err_code);
+        //TODO think about handling such error
+        // -> give up and try to register next one
+        // -> retry to register this one
+    }
+}
 
 /***************************************************************************************************
  * @section Main
