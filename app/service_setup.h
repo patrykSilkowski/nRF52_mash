@@ -10,6 +10,8 @@
 
 #include "service_bsp.h"
 
+/* GCC */
+#include <stdint.h>
 
 #define SERVICE_STR_MAX_LENGTH       13
 
@@ -53,7 +55,7 @@ int8_t create_self_services_init(void);
  */
 int8_t create_self_services_continue(void);
 
-int8_t service_create(uint8_t * p_base_id,
+int8_t service_create(char * p_base_id,
                       endpoint_t endpoint,
                       service_type_t type);
 

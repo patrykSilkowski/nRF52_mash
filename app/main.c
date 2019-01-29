@@ -70,7 +70,7 @@ static void sched_ot_recommissioning(void * p_event_data, uint16_t event_size);
 static void sched_start_services(void * p_event_data, uint16_t event_size);
 static void sched_registed_service(void * p_event_data, uint16_t event_size);
 static void sched_subscribed_service(void * p_event_data, uint16_t event_size);
-
+static void sched_timeout_handler(void * p_event_data, uint16_t event_size);
 
 /***************************************************************************************************
  * @section app prototypes
@@ -447,6 +447,14 @@ static int8_t subscription_acknowledge_callback(mqttsn_event_t * p_event)
 }
 
 
+static int8_t message_timeout_callback(mqttsn_event_t * p_event)
+{
+    return (int8_t) app_sched_event_put(p_event,
+                                        sizeof(mqttsn_event_t *),
+                                        sched_timeout_handler);
+}
+
+
 static void mqttsn_init(void)
 {
     comm_manager_set_evt_gateway_search_timeout_cb(gateway_search_callback);
@@ -454,6 +462,7 @@ static void mqttsn_init(void)
     comm_manager_set_evt_connected_cb(connected_to_gateway_callback);
     comm_manager_set_evt_registered_cb(register_acknowledge_callback);
     comm_manager_set_evt_subscribed_cb(subscription_acknowledge_callback);
+    comm_manager_set_evt_timeout_cb(message_timeout_callback);
 
 
     comm_manager_mqttsn_init(thread_ot_instance_get());
@@ -650,6 +659,8 @@ static void sched_registed_service(void * p_event_data, uint16_t event_size)
 
 static void sched_subscribed_service(void * p_event_data, uint16_t event_size)
 {
+
+    // TODO keep in mind that this gonna be changed due to external subscriber handling
     mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
 
     int8_t err_code = service_insert_to_database(
@@ -687,6 +698,80 @@ static void sched_subscribed_service(void * p_event_data, uint16_t event_size)
         // -> retry to register this one
     }
 }
+
+
+static void sched_timeout_handler(void * p_event_data, uint16_t event_size)
+{
+    mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
+
+    switch(p_evt->event_data.error.error)
+    {
+        case MQTTSN_ERROR_REJECTED_CONGESTION:
+            NRF_LOG_ERROR("Message has been rejected due to network congestion!");
+        break;
+
+        case MQTTSN_ERROR_TIMEOUT:
+            NRF_LOG_ERROR("Retransmission limit has been reached!");
+        break;
+
+    } // end of switch (error)
+
+    int8_t err_code = 0;
+
+    switch(p_evt->event_data.error.msg_type)
+    {
+        case MQTTSN_PACKET_CONNACK:
+            NRF_LOG_ERROR("CONNACK message has not been received!");
+        break;
+
+        case MQTTSN_PACKET_REGACK:
+            NRF_LOG_ERROR("REGACK message has not been received!");
+
+            err_code = service_retry_register(p_evt->event_data.error.msg_id);
+        break;
+
+        case MQTTSN_PACKET_PUBACK:
+            NRF_LOG_ERROR("PUBACK message has not been received!");
+        break;
+
+        case MQTTSN_PACKET_SUBACK:
+            NRF_LOG_ERROR("SUBACK message has not been received!");
+
+            err_code = service_retry_subscribe(p_evt->event_data.error.msg_id);
+        break;
+
+        case MQTTSN_PACKET_UNSUBACK:
+            NRF_LOG_ERROR("UNSUBACK message has not been received!");
+        break;
+
+        case MQTTSN_PACKET_PINGREQ:
+            NRF_LOG_ERROR("PINGREQ message has not been received!");
+        break;
+
+        case MQTTSN_PACKET_WILLTOPICUPD:
+            NRF_LOG_ERROR("WILLTOPICUPD message has not been received!");
+        break;
+
+        case MQTTSN_PACKET_WILLMSGUPD:
+            NRF_LOG_ERROR("WILLMSGUPD message has not been received!");
+        break;
+
+        default:
+        case MQTTSN_PACKET_INCORRECT:
+            NRF_LOG_ERROR("Unknown error!");
+        break;
+    } // end of switch (msg_type)
+
+    NRF_LOG_ERROR("Timeout handling returned with error %d", err_code);
+
+    if (SERVICE_RETRY_CNT_MAX_FLAG == err_code)
+    {
+        // TODO this should be reconsidered!
+        comm_manager_disconnect_from_gateway();
+        comm_manager_search_gateway();
+    }
+}
+
 
 /***************************************************************************************************
  * @section Main

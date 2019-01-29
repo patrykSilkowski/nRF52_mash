@@ -12,6 +12,8 @@ $(OUTPUT_DIRECTORY)/nrf52840_xxaa.out: \
 SRC_FILES += \
   $(PROJ_DIR)/main.c \
   $(PROJ_DIR)/comm_manager.c \
+  $(PROJ_DIR)/comm_utils.c \
+  $(PROJ_DIR)/service_setup.c \
 
 # Source files common to all targets
 SRC_FILES += \
@@ -75,6 +77,11 @@ SRC_FILES += \
   $(SDK_ROOT)/components/thread/mqtt_sn/mqtt_sn_client/mqttsn_transport_ot.c \
   $(SDK_ROOT)/components/thread/utils/thread_utils.c \
 
+# Application headers
+INC_FOLDERS += \
+  $(PROJ_DIR) \
+  $(PROJ_DIR)/app \
+
 # Include folders common to all targets
 INC_FOLDERS += \
   $(SDK_ROOT)/components \
@@ -99,7 +106,6 @@ INC_FOLDERS += \
   $(SDK_ROOT)/modules/nrfx \
   $(SDK_ROOT)/components/libraries/experimental_section_vars \
   $(SDK_ROOT)/integration/nrfx/legacy \
-  $(PROJ_DIR) \
   $(SDK_ROOT)/components/libraries/delay \
   $(SDK_ROOT)/external/segger_rtt \
   $(SDK_ROOT)/components/drivers_nrf/nrf_soc_nosd \

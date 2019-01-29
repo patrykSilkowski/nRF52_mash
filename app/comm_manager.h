@@ -29,6 +29,8 @@ void comm_manager_search_gateway(void);
 
 void comm_manager_connect_to_gateway(void);
 
+void comm_manager_disconnect_from_gateway(void);
+
 void comm_manager_set_evt_gateway_found_cb(comm_manager_event_cb cb);
 
 void comm_manager_set_evt_connected_cb(comm_manager_event_cb cb);
@@ -51,13 +53,13 @@ void comm_manager_set_evt_gateway_search_timeout_cb(comm_manager_event_cb cb);
 
 /**@brief Function for register the MQTTSN topic to the gateway.
  */
-int8_t comm_manager_topic_register(const uint8_t * p_topic_name,
-                                        uint16_t * msg_id);
+int8_t comm_manager_topic_register(char * p_topic_name,
+                                   uint16_t * msg_id);
 
 /**@brief Function for subscribe to MQTTSN topic.
  */
-int8_t comm_manager_topic_subscribe(const uint8_t * p_topic_name,
-                                         uint16_t * msg_id);
+int8_t comm_manager_topic_subscribe(char * p_topic_name,
+                                    uint16_t * msg_id);
 
 
 

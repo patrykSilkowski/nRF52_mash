@@ -27,25 +27,11 @@ static mqttsn_client_t      m_client;                                       /**<
 static mqttsn_remote_t      m_gateway_addr;                                 /**< A gateway address. */
 static uint8_t              m_gateway_id;                                   /**< A gateway ID. */
 static mqttsn_connect_opt_t m_connect_opt;                                  /**< Connect options for the MQTT-SN client. */
-static uint16_t             m_msg_id               = 0;                     /**< Message ID thrown with MQTTSN_EVENT_TIMEOUT. */
 
 // THESE SHOULD BE CHANGED ACCORDING TO PROTOCOL ASSUMPTIONS
 // CLIENT ID IS BASED ON EUI64
 
 static char                 m_client_id[]          = "nRF52840";            /**< The MQTT-SN Client's ID. */
-static char                 m_topic_name_pub[]     = "nRF52840/data";       /**< Name of the topic corresponding to subscriber's BSP_LED_2. */
-static mqttsn_topic_t       m_topic_pub            =                        /**< Topic corresponding to subscriber's BSP_LED_2. */
-{
-    .p_topic_name = (unsigned char *)m_topic_name_pub,
-    .topic_id     = 0,
-};
-
-static char                 m_topic_name_sub[]     = "nRF52840/cmd";        /**< Name of the topic corresponding to subscriber's BSP_LED_2. */
-static mqttsn_topic_t       m_topic_sub            =                        /**< Topic corresponding to subscriber's BSP_LED_2. */
-{
-    .p_topic_name = (unsigned char *)m_topic_name_sub,
-    .topic_id     = 0,
-};
 
 static comm_manager_event_cb m_event_cb[MQTTSN_EVENT_COUNT];
 
@@ -66,7 +52,7 @@ static void connect_opt_init(void)
     memcpy(m_connect_opt.p_client_id, (unsigned char *)m_client_id, m_connect_opt.client_id_len);
 }
 
-
+/*
 static void subscribe()
 {
     uint8_t  topic_name_len = strlen(m_topic_name_sub);
@@ -81,7 +67,7 @@ static void subscribe()
         NRF_LOG_INFO("SUBSCRIBE message successfully sent.");
     }
 }
-
+*/
 
 
 static void execute_callback(mqttsn_event_t * p_event)
@@ -182,6 +168,7 @@ static void evt_unsubscribed(mqttsn_event_t * p_event)
  */
 static void evt_received(mqttsn_event_t * p_event)
 {
+/*
     if (p_event->event_data.published.packet.topic.topic_id == m_topic_sub.topic_id)
     {
         uint8_t* p_data = p_event->event_data.published.p_payload;
@@ -195,7 +182,7 @@ static void evt_received(mqttsn_event_t * p_event)
     {
         NRF_LOG_INFO("MQTT-SN event: Content to unsubscribed topic received. Dropping packet.\r\n");
     }
-
+*/
     execute_callback(p_event);
 }
 
@@ -294,18 +281,6 @@ static void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_ev
 }
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 /**@brief Function for initializing the MQTTSN client.
  */
 void comm_manager_mqttsn_init(const void * p_transport)
@@ -357,15 +332,30 @@ void comm_manager_connect_to_gateway(void)
 }
 
 
+/**@brief Function for disconnecting from the MQTTSN gateway.
+ */
+void comm_manager_disconnect_from_gateway(void)
+{
+    uint32_t err_code = mqttsn_client_disconnect(&m_client);
+
+    if (err_code != NRF_SUCCESS)
+    {
+        NRF_LOG_ERROR("MQTT-SN: disconnect from gateway error: 0x%x\r\n", err_code);
+    }
+    else
+    {
+        NRF_LOG_INFO("MQTT-SN: disconnect from gateway sent.");
+    }
+}
 
 
-int8_t comm_manager_topic_register(const uint8_t * p_topic_name,
-                                        uint16_t * msg_id)
+int8_t comm_manager_topic_register(char * p_topic_name,
+                                   uint16_t * msg_id)
 {
     uint32_t err_code = mqttsn_client_topic_register(&m_client,
-                                                     p_topic_name,
-                                                     strlen(p_topic_name),
-                                                     msg_id);
+                                         (const uint8_t*)p_topic_name,
+                                         strlen(p_topic_name),
+                                         msg_id);
     if (err_code != NRF_SUCCESS)
     {
         NRF_LOG_ERROR("MQTT-SN: register error: 0x%x\r\n", err_code);
@@ -379,13 +369,13 @@ int8_t comm_manager_topic_register(const uint8_t * p_topic_name,
 }
 
 
-int8_t comm_manager_topic_subscribe(const uint8_t * p_topic_name,
-                                         uint16_t * msg_id)
+int8_t comm_manager_topic_subscribe(char * p_topic_name,
+                                    uint16_t * msg_id)
 {
     uint32_t err_code = mqttsn_client_subscribe(&m_client,
-                                                p_topic_name,
-                                                strlen(p_topic_name),
-                                                msg_id);
+                                        (const uint8_t*)p_topic_name,
+                                        strlen(p_topic_name),
+                                        msg_id);
     if (err_code != NRF_SUCCESS)
     {
         NRF_LOG_ERROR("MQTT-SN: subscribe error: 0x%x\r\n", err_code);

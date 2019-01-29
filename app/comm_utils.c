@@ -7,7 +7,7 @@
 #define ID_LENGTH           13
 #define SOC_ADDR_LENGTH     8
 
-static unsigned char id[ID_LENGTH] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
+static char id[ID_LENGTH] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
 
 static const unsigned char base64_enc_map[64] =
 {
@@ -24,8 +24,8 @@ static const unsigned char base64_enc_map[64] =
 /*
  * Encode a buffer into base64 format
  */
-int mbedtls_base64_encode( unsigned char *dst, size_t dlen, size_t *olen,
-                   const unsigned char *src, size_t slen )
+int mbedtls_base64_encode(unsigned char *dst, size_t dlen, size_t *olen,
+                          const unsigned char *src, size_t slen )
 {
     size_t i, n;
     int C1, C2, C3;
@@ -92,7 +92,7 @@ int mbedtls_base64_encode( unsigned char *dst, size_t dlen, size_t *olen,
 /*
  * External functions
  */
-unsigned char* comm_utils_get_id(void)
+char * comm_utils_get_id(void)
 {
   return id;
 }
@@ -103,5 +103,5 @@ void comm_utils_id_gen(void)
 {
   size_t len;
   unsigned char *addr = (unsigned char*) NRF_FICR->DEVICEADDR;
-  mbedtls_base64_encode(id, ID_LENGTH, &len, addr, SOC_ADDR_LENGTH);
+  mbedtls_base64_encode((unsigned char*) id, ID_LENGTH, &len, addr, SOC_ADDR_LENGTH);
 }

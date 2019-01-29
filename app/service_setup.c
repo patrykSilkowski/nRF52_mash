@@ -6,12 +6,13 @@
  */
 
 
+#include "service_setup.h"
+
+/* GCC */
 #include <string.h>
 #include <stdio.h>
 
-
-#include "service_setup.h"
-
+/* APP */
 #include "comm_manager.h"
 #include "comm_utils.h"
 
@@ -36,15 +37,15 @@
 
 typedef struct {
     service_data_t  service;
-    uint8_t         topic_name[MQTTSN_TOPIC_NAME_LENGTH];
+    char            topic_name[MQTTSN_TOPIC_NAME_LENGTH];
     uint16_t        message_id;
     uint8_t         retry_cnt;
     bool            is_created;
 } create_service_t;
 
 
-static service_data_t m_service_database[SERVICE_DATA_ARRAY_SIZE];
-static uint8_t        m_service_cnt = 0;
+static service_data_t   m_service_database[SERVICE_DATA_ARRAY_SIZE];
+static uint8_t          m_service_cnt     =  0;
 
 
 static endpoint_t       m_iter_endpoints  =  0;
@@ -77,30 +78,41 @@ service_data_t * database_pop_with_topic_id(uint16_t topic_id)
 
 
 
-int8_t mash_topic_name_serial(uint8_t * id, create_service_t * dataset)
+int8_t mash_topic_name_serial(char * id_str, create_service_t * dataset)
 {
-    uint8_t str_service_type[SERVICE_STR_MAX_LENGTH] = {0};
+    char str_service_type[SERVICE_STR_MAX_LENGTH] = {0};
+    int8_t ret;
 
     switch (dataset->service.type)
     {
         case info:
-            str_service_type = SERVICE_STR_INFO;
+            ret = (int8_t) snprintf(str_service_type,
+                                    SERVICE_STR_MAX_LENGTH,
+                                    SERVICE_STR_INFO);
         break;
 
         case onoff:
-            str_service_type = SERVICE_STR_ONOFF;
+            ret = (int8_t) snprintf(str_service_type,
+                                    SERVICE_STR_MAX_LENGTH,
+                                    SERVICE_STR_ONOFF);
         break;
 
         case config_sub:
-            str_service_type = SERVICE_STR_CONFIG_SUB;
+            ret = (int8_t) snprintf(str_service_type,
+                                    SERVICE_STR_MAX_LENGTH,
+                                    SERVICE_STR_CONFIG_SUB);
         break;
 
         case config_unsub:
-            str_service_type = SERVICE_STR_CONFIG_UNSUB;
+            ret = (int8_t) snprintf(str_service_type,
+                                    SERVICE_STR_MAX_LENGTH,
+                                    SERVICE_STR_CONFIG_UNSUB);
         break;
 
         case config_list:
-            str_service_type = SERVICE_STR_CONFIG_LIST;
+            ret = (int8_t) snprintf(str_service_type,
+                                    SERVICE_STR_MAX_LENGTH,
+                                    SERVICE_STR_CONFIG_LIST);
         break;
 
         case type_none:
@@ -109,14 +121,17 @@ int8_t mash_topic_name_serial(uint8_t * id, create_service_t * dataset)
         break;
     } // end of switch
 
-    int8_t ret = (int8_t) snprintf(dataset->topic_name,
-                                   MQTTSN_TOPIC_NAME_LENGTH,
-                                   "%s//%d//%s",
-                                   id,
-                                   (uint8_t) dataset->service.endpoint,
-                                   str_service_type);
+    if (ret < 0)
+        return -1;
 
-    if (ret >= MQTTSN_TOPIC_NAME_LENGTH)
+    ret = (int8_t) snprintf(dataset->topic_name,
+                            MQTTSN_TOPIC_NAME_LENGTH,
+                            "%s//%d//%s",
+                            id_str,
+                            (uint8_t) dataset->service.endpoint,
+                            str_service_type);
+
+    if (ret < 0)
         return -1;
     else
         return 0;
@@ -124,7 +139,7 @@ int8_t mash_topic_name_serial(uint8_t * id, create_service_t * dataset)
 
 
 // change ID to uint8_t
-int8_t service_create(uint8_t * p_base_id,
+int8_t service_create(char * p_base_id,
                       endpoint_t endpoint,
                       service_type_t type)
 {
@@ -140,7 +155,7 @@ int8_t service_create(uint8_t * p_base_id,
     if (type >= type_none)
         return -4;
 
-    memset(&m_srv_setup, 0, size_of(create_service_t));
+    memset(&m_srv_setup, 0, sizeof(create_service_t));
 
     m_srv_setup.service.endpoint = endpoint;
     m_srv_setup.service.type = type;
@@ -155,7 +170,7 @@ int8_t service_create(uint8_t * p_base_id,
 //static inline (?)
 void service_destroy(create_service_t * p_data)
 {
-    memset(&m_srv_setup, 0, size_of(create_service_t));
+    memset(&m_srv_setup, 0, sizeof(create_service_t));
 }
 
 
@@ -164,7 +179,7 @@ int8_t service_register(void)
     if (false == m_srv_setup.is_created)
         return -1;
 
-    return comm_manager_topic_register(&m_srv_setup.topic_name,
+    return comm_manager_topic_register(m_srv_setup.topic_name,
                                        &m_srv_setup.message_id);
 }
 
@@ -173,7 +188,7 @@ int8_t service_subscribe(void)
     if (false == m_srv_setup.is_created)
         return -1;
 
-    return comm_manager_topic_subscribe(&m_srv_setup.topic_name,
+    return comm_manager_topic_subscribe(m_srv_setup.topic_name,
                                         &m_srv_setup.message_id);
 }
 
@@ -210,7 +225,7 @@ int8_t service_insert_to_database(uint16_t msg_id, uint16_t topic_id)
         return -3;
 
     //add to database
-    database_add(m_srv_setup.service);
+    database_add(&m_srv_setup.service);
     return 0;
 }
 
