@@ -241,6 +241,7 @@ static void mqttsn_evt_handler(mqttsn_client_t * p_client, mqttsn_event_t * p_ev
 
         case MQTTSN_EVENT_REGISTERED:
             NRF_LOG_INFO("MQTT-SN event: Client registered topic.\r\n");
+            NRF_LOG_DEBUG("actual pointer %p", p_event);
             evt_registered(p_event);
         break;
 

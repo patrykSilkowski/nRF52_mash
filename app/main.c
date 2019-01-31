@@ -43,8 +43,8 @@
 #define OT_JOIN_TRIES          20                                           /**< Amount of attempts to connect to the OT network */
 
 
-#define SCHED_QUEUE_SIZE       32                                           /**< Maximum number of events in the scheduler queue. */
-#define SCHED_EVENT_DATA_SIZE  APP_TIMER_SCHED_EVENT_DATA_SIZE              /**< Maximum app_scheduler event size. */
+#define SCHED_QUEUE_SIZE       8                                            /**< Maximum number of events in the scheduler queue. */
+#define SCHED_EVENT_DATA_SIZE  sizeof(mqttsn_event_t)                       /**< Maximum app_scheduler event size. */
 
 #define APP_TIM_JOINER_DELAY 200
 #define APP_TIMER_TICKS_TIMEOUT APP_TIMER_TICKS(50)
@@ -71,6 +71,7 @@ static void sched_start_services(void * p_event_data, uint16_t event_size);
 static void sched_registed_service(void * p_event_data, uint16_t event_size);
 static void sched_subscribed_service(void * p_event_data, uint16_t event_size);
 static void sched_timeout_handler(void * p_event_data, uint16_t event_size);
+static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size);
 
 /***************************************************************************************************
  * @section app prototypes
@@ -427,11 +428,16 @@ static int8_t connected_to_gateway_callback(mqttsn_event_t * p_event)
 
 static int8_t register_acknowledge_callback(mqttsn_event_t * p_event)
 {
+    NRF_LOG_DEBUG("actual callback pointer %p with sizeof %d", p_event, sizeof(mqttsn_event_t *));
     /**
      * Just schedule the register service handler
      */
-    return (int8_t) app_sched_event_put(p_event,
-                                        sizeof(mqttsn_event_t *),
+
+
+
+
+    return (int8_t) app_sched_event_put((void const *) p_event,
+                                        sizeof(mqttsn_event_t),
                                         sched_registed_service);
 }
 
@@ -442,7 +448,7 @@ static int8_t subscription_acknowledge_callback(mqttsn_event_t * p_event)
      * Just schedule the subscript service handler
      */
     return (int8_t) app_sched_event_put(p_event,
-                                        sizeof(mqttsn_event_t *),
+                                        sizeof(mqttsn_event_t),
                                         sched_subscribed_service);
 }
 
@@ -455,6 +461,14 @@ static int8_t message_timeout_callback(mqttsn_event_t * p_event)
 }
 
 
+static int8_t message_received_callback(mqttsn_event_t * p_event)
+{
+    return (int8_t) app_sched_event_put(p_event,
+                                        sizeof(mqttsn_event_t *),
+                                        sched_receive_msg_handler);
+}
+
+
 static void mqttsn_init(void)
 {
     comm_manager_set_evt_gateway_search_timeout_cb(gateway_search_callback);
@@ -463,6 +477,7 @@ static void mqttsn_init(void)
     comm_manager_set_evt_registered_cb(register_acknowledge_callback);
     comm_manager_set_evt_subscribed_cb(subscription_acknowledge_callback);
     comm_manager_set_evt_timeout_cb(message_timeout_callback);
+    comm_manager_set_evt_received_cb(message_received_callback);
 
 
     comm_manager_mqttsn_init(thread_ot_instance_get());
@@ -644,6 +659,8 @@ static void sched_start_services(void * p_event_data, uint16_t event_size)
 
 static void sched_registed_service(void * p_event_data, uint16_t event_size)
 {
+    NRF_LOG_DEBUG("actual void pointer %p", p_event_data);
+
     mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
 
     int8_t err_code = service_subscribe_to_registered(
@@ -652,6 +669,7 @@ static void sched_registed_service(void * p_event_data, uint16_t event_size)
 
     if (err_code)
     {
+        NRF_LOG_DEBUG("actual pointer %p", p_evt);
         NRF_LOG_ERROR("Service: subscription to registered topic error: %d\r\n",
                       err_code);
     }
@@ -772,6 +790,53 @@ static void sched_timeout_handler(void * p_event_data, uint16_t event_size)
     }
 }
 
+static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
+{
+//    mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
+
+    // TODO change as to handle subscribed topics
+/*
+    service_data_t * p_service = database_pop_with_topic_id(
+        p_evt->event_data.published.packet.topic.topic_id);
+
+    if (NULL == p_service)
+    {
+        NRF_LOG_ERROR("Service: no such service (topic) with ID %d",
+                      p_evt->event_data.published.packet.topic.topic_id);
+       return;
+    }
+
+    switch (p_service->type)
+    {
+        // not all types are handled
+        case info:
+            //parse msg INFO
+        break;
+
+        case onoff:
+            //parse msg AND handle ext subscription
+        break;
+
+        case config_sub:
+            //service_config_subscribe(p->endpoint_t , MSG)
+        break;
+
+        case config_unsub:
+
+        break;
+
+        case config_list:
+
+        break;
+
+        case type_none:
+        default:
+            NRF_LOG_ERROR("Service: no such service");
+        break;
+    } // end of switch by service->type
+*/
+
+}
 
 /***************************************************************************************************
  * @section Main
