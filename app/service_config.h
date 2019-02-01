@@ -8,6 +8,8 @@
 #ifndef APP_SERVICE_CONFIG_H_
 #define APP_SERVICE_CONFIG_H_
 
+/* APP */
+#include "service_bsp.h"
 
 
 #endif /* APP_SERVICE_CONFIG_H_ */

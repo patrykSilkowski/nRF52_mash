@@ -792,10 +792,10 @@ static void sched_timeout_handler(void * p_event_data, uint16_t event_size)
 
 static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
 {
-//    mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
+    mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
 
     // TODO change as to handle subscribed topics
-/*
+
     service_data_t * p_service = database_pop_with_topic_id(
         p_evt->event_data.published.packet.topic.topic_id);
 
@@ -805,6 +805,8 @@ static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
                       p_evt->event_data.published.packet.topic.topic_id);
        return;
     }
+
+    int8_t err_code = 0;
 
     switch (p_service->type)
     {
@@ -818,7 +820,9 @@ static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
         break;
 
         case config_sub:
-            //service_config_subscribe(p->endpoint_t , MSG)
+            err_code = service_config_subscribe(p_service->endpoint,
+                                    p_evt->event_data.published.packet.p_data,
+                                    p_evt->event_data.published.packet.len);
         break;
 
         case config_unsub:
@@ -834,8 +838,6 @@ static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
             NRF_LOG_ERROR("Service: no such service");
         break;
     } // end of switch by service->type
-*/
-
 }
 
 /***************************************************************************************************
