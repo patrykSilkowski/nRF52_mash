@@ -29,6 +29,8 @@
 #include "comm_utils.h"
 #include "service_bsp.h"
 #include "service_setup.h"
+#include "service_config.h"
+
 
 #define VENDOR_NAME   "SIGMA_PS"
 #define VENDOR_MODEL  "1"
@@ -677,20 +679,31 @@ static void sched_registed_service(void * p_event_data, uint16_t event_size)
 
 static void sched_subscribed_service(void * p_event_data, uint16_t event_size)
 {
-
-    // TODO keep in mind that this gonna be changed due to external subscriber handling
     mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
 
-    int8_t err_code = service_insert_to_database(
-        p_evt->event_data.registered.packet.id,
-        p_evt->event_data.registered.packet.topic.topic_id);
+    int8_t err_code;
+
+    if (p_evt->event_data.registered.packet.topic.topic_id
+                                                    > SERVICE_SELF_TOPIC_ID_MAX)
+    {
+        // handling the subscription for external topic
+        err_code = service_config_add_ext_topic(
+                    p_evt->event_data.registered.packet.topic.topic_id,
+                    p_evt->event_data.registered.packet.id);
+    }
+    else
+    {
+        // handling self subscription
+        err_code = service_insert_to_database(
+                    p_evt->event_data.registered.packet.id,
+                    p_evt->event_data.registered.packet.topic.topic_id);
+    }
 
     if (err_code)
     {
         NRF_LOG_ERROR("Service: subscription of topic with ID:%d returned with error: %d\r\n",
                       p_evt->event_data.registered.packet.topic.topic_id,
                       err_code);
-
         //TODO think about handling such error
         // -> give up and try to register next one
         // -> retry to register this one
@@ -707,13 +720,6 @@ static void sched_subscribed_service(void * p_event_data, uint16_t event_size)
     {
         NRF_LOG_INFO("Service: all self functions has been added.\r\n",
                      p_evt->event_data.registered.packet.topic.topic_id);
-    }
-    else if (err_code)
-    {
-        NRF_LOG_ERROR("Service: register of next function error: %d\r\n", err_code);
-        //TODO think about handling such error
-        // -> give up and try to register next one
-        // -> retry to register this one
     }
 }
 
@@ -780,6 +786,7 @@ static void sched_timeout_handler(void * p_event_data, uint16_t event_size)
         break;
     } // end of switch (msg_type)
 
+    //log error because the timeout is an error itself
     NRF_LOG_ERROR("Timeout handling returned with error %d", err_code);
 
     if (SERVICE_RETRY_CNT_MAX_FLAG == err_code)
@@ -793,11 +800,18 @@ static void sched_timeout_handler(void * p_event_data, uint16_t event_size)
 static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
 {
     mqttsn_event_t * p_evt = (mqttsn_event_t *) p_event_data;
+    service_data_t * p_service = NULL;
 
-    // TODO change as to handle subscribed topics
-
-    service_data_t * p_service = database_pop_with_topic_id(
-        p_evt->event_data.published.packet.topic.topic_id);
+    if (p_evt->event_data.registered.packet.topic.topic_id
+                                                    > SERVICE_SELF_TOPIC_ID_MAX)
+    {
+        //TODO add ext_sub_topic_t handling!
+    }
+    else
+    {
+        p_service = service_pop_with_topic_id(
+                            p_evt->event_data.published.packet.topic.topic_id);
+    }
 
     if (NULL == p_service)
     {
@@ -806,7 +820,7 @@ static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
        return;
     }
 
-    int8_t err_code = 0;
+    int8_t err_code = -1;
 
     switch (p_service->type)
     {
@@ -838,6 +852,14 @@ static void sched_receive_msg_handler(void * p_event_data, uint16_t event_size)
             NRF_LOG_ERROR("Service: no such service");
         break;
     } // end of switch by service->type
+
+    if (err_code)
+    {
+        NRF_LOG_ERROR("Receiving handler of service %d returned with error %d",
+        p_service->type,
+        err_code);
+    }
+
 }
 
 /***************************************************************************************************

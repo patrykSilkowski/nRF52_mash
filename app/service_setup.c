@@ -19,7 +19,6 @@
 
 #define SERVICE_DATA_ARRAY_SIZE       60
 #define SERVICE_CREATE_BUFFER_SIZE    4
-#define BASE64_LENGTH                 12
 
 #define MQTTSN_TOPIC_NAME_LENGTH      32
 #define DEFAULT_RETRANSMISSION_CNT    4
@@ -44,6 +43,7 @@ typedef struct {
 } create_service_t;
 
 
+// TODO there are 40 self topics probably
 static service_data_t   m_service_database[SERVICE_DATA_ARRAY_SIZE];
 static uint8_t          m_service_cnt     =  0;
 
@@ -69,13 +69,6 @@ void database_delete_with_topic_id(uint16_t topic_id)
 {
     //here will be set binary search probably
 }
-
-service_data_t * database_pop_with_topic_id(uint16_t topic_id)
-{
-    //here will be set binary search probably
-    return NULL;
-}
-
 
 
 int8_t mash_topic_name_serial(char * id_str, create_service_t * dataset)
@@ -126,9 +119,9 @@ int8_t mash_topic_name_serial(char * id_str, create_service_t * dataset)
 
     ret = (int8_t) snprintf(dataset->topic_name,
                             MQTTSN_TOPIC_NAME_LENGTH,
-                            "%s//%d//%s",
+                            "%s/%d/%s",
                             id_str,
-                            (uint8_t) dataset->service.endpoint,
+                            dataset->service.endpoint,
                             str_service_type);
 
     if (ret < 0)
@@ -149,7 +142,7 @@ int8_t service_create(char * p_base_id,
     if (strlen(p_base_id) != BASE64_LENGTH)
         return -2;
 
-    if (endpoint >= endpoint_none)
+    if (endpoint > SERVICE_ENDPOINT_MAX)
         return -3;
 
     if (type >= type_none)
@@ -168,9 +161,16 @@ int8_t service_create(char * p_base_id,
 
 
 //static inline (?)
-void service_destroy(create_service_t * p_data)
+void service_destroy(void)
 {
     memset(&m_srv_setup, 0, sizeof(create_service_t));
+}
+
+
+bool service_is_created(uint16_t * msg_id)
+{
+    *msg_id = m_srv_setup.message_id;
+    return m_srv_setup.is_created;
 }
 
 
@@ -226,6 +226,8 @@ int8_t service_insert_to_database(uint16_t msg_id, uint16_t topic_id)
 
     //add to database
     database_add(&m_srv_setup.service);
+    service_destroy();
+
     return 0;
 }
 
@@ -271,7 +273,7 @@ int8_t create_self_services_init(void)
 
     //start the chain of creating->registering->subscribing all self services
     //iterate with endpoints and service types
-    m_iter_endpoints = button_0;
+    m_iter_endpoints = SERVICE_BSP_LED0;
     m_iter_services = info;
 
     // hit first self service creation
@@ -289,7 +291,7 @@ int8_t create_self_services_init(void)
 
 int8_t create_self_services_continue(void)
 {
-    if (   m_iter_endpoints  == endpoint_none
+    if (   m_iter_endpoints  == SERVICE_BSP_ENDPOINTS
         && m_iter_services   == type_none    )
         return 0;   //all self services already registered!
 
@@ -299,7 +301,7 @@ int8_t create_self_services_continue(void)
     {
         m_iter_endpoints++;
 
-        if (endpoint_none == m_iter_endpoints)
+        if (SERVICE_BSP_ENDPOINTS == m_iter_endpoints)
         {
             return SERVICE_ALL_REGISTERED_FLAG;
         }
@@ -321,3 +323,18 @@ int8_t create_self_services_continue(void)
 
     return ret;
 }
+
+service_data_t * service_pop_with_topic_id(uint16_t topic_id)
+{
+    // the topic IDs are client-oriented so there is no need to seach them
+    // so the topic ID is an index as well
+    if(topic_id == m_service_database[topic_id - 1].topic_id)
+    {
+        return &m_service_database[topic_id - 1];
+    }
+    else
+    {
+        return NULL;
+    }
+}
+

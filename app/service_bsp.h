@@ -9,6 +9,15 @@
 #define APP_SERVICE_BSP_H_
 
 
+#define SERVICE_BSP_LED0      0
+#define SERVICE_BSP_LED1      1
+#define SERVICE_BSP_LED2      2
+#define SERVICE_BSP_LED3      3
+#define SERVICE_BSP_SW0       4
+#define SERVICE_BSP_SW1       5
+#define SERVICE_BSP_SW2       6
+#define SERVICE_BSP_SW3       7
+
 #define SERVICE_BSP_ENDPOINTS 8
 
 /*
@@ -16,17 +25,6 @@
  * A lot of stuff uses endpoint_none value to indicate the number
  * of endpoints on this particular platform/board
  */
-typedef enum {
-    button_0 = 0,
-    button_1,
-    button_2,
-    button_3,
-    led_0,
-    led_1,
-    led_2,
-    led_3,
-    endpoint_none
-} endpoint_t;
 
 
 #endif /* APP_SERVICE_BSP_H_ */

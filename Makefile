@@ -13,6 +13,7 @@ SRC_FILES += \
   $(PROJ_DIR)/main.c \
   $(PROJ_DIR)/comm_manager.c \
   $(PROJ_DIR)/comm_utils.c \
+  $(PROJ_DIR)/service_config.c \
   $(PROJ_DIR)/service_setup.c \
 
 # Source files common to all targets
